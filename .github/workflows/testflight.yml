@@ -51,9 +51,35 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          if [ -d /Applications/Xcode.app ]; then
-            sudo xcode-select -s /Applications/Xcode.app
-          fi
+          # App Store Connect rejects uploads built with the iOS 18 SDK. Use Xcode 26+.
+          python3 - << 'PY'
+          import glob, os, plistlib, subprocess, sys
+          found = []
+          for app in glob.glob("/Applications/Xcode*.app"):
+              plist_path = os.path.join(app, "Contents", "Info.plist")
+              if not os.path.exists(plist_path):
+                  continue
+              with open(plist_path, "rb") as handle:
+                  info = plistlib.load(handle)
+              version = str(info.get("CFBundleShortVersionString", "0"))
+              parts = []
+              for piece in version.split("."):
+                  try:
+                      parts.append(int(piece))
+                  except ValueError:
+                      parts.append(0)
+              found.append((parts, version, app))
+          found.sort()
+          print("Installed Xcode:")
+          for _, version, app in found:
+              print(f"  {version} {app}")
+          chosen = [item for item in found if item[0] and item[0][0] >= 26]
+          if not chosen:
+              sys.exit("Xcode 26 or newer is required to upload to App Store Connect.")
+          version, app = chosen[-1][1], chosen[-1][2]
+          print(f"Selecting Xcode {version}")
+          subprocess.check_call(["sudo", "xcode-select", "-s", app])
+          PY
           xcodebuild -version
 
       - name: Install XcodeGen
@@ -99,6 +125,85 @@ jobs:
           print("Wrote the App Store Connect API key to a temporary file.")
           PY
 
+      - name: Register a CI device
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import base64, json, os, subprocess, time, urllib.error, urllib.request
+
+          def b64url(raw: bytes) -> str:
+              return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+          def der_to_raw(der: bytes) -> bytes:
+              # OpenSSL returns a DER SEQUENCE of two INTEGERs. ES256 needs raw R||S.
+              if der[0] != 0x30:
+                  raise SystemExit("Could not sign the App Store Connect token.")
+              index = 2
+              if der[1] & 0x80:
+                  index = 2 + (der[1] & 0x7F)
+              if der[index] != 0x02:
+                  raise SystemExit("Could not sign the App Store Connect token.")
+              index += 1
+              rlen = der[index]
+              index += 1
+              r = der[index:index + rlen]
+              index += rlen
+              if der[index] != 0x02:
+                  raise SystemExit("Could not sign the App Store Connect token.")
+              index += 1
+              slen = der[index]
+              index += 1
+              s = der[index:index + slen]
+              return r[-32:].rjust(32, b"\x00") + s[-32:].rjust(32, b"\x00")
+
+          header = b64url(json.dumps({"alg": "ES256", "kid": os.environ["ASC_KEY_ID"], "typ": "JWT"}, separators=(",", ":")).encode())
+          now = int(time.time())
+          payload = b64url(json.dumps({
+              "iss": os.environ["ASC_ISSUER_ID"],
+              "iat": now,
+              "exp": now + 600,
+              "aud": "appstoreconnect-v1",
+          }, separators=(",", ":")).encode())
+          signing_input = f"{header}.{payload}".encode()
+          der = subprocess.check_output(
+              ["openssl", "dgst", "-sha256", "-sign", os.environ["ASC_KEY_PATH"]],
+              input=signing_input,
+          )
+          token = f"{header}.{payload}.{b64url(der_to_raw(der))}"
+          body = json.dumps({
+              "data": {
+                  "type": "devices",
+                  "attributes": {
+                      "name": "No Ads Remote CI",
+                      "platform": "IOS",
+                      "udid": "00008110-000A1111111A801E",
+                  },
+              }
+          }).encode()
+          request = urllib.request.Request(
+              "https://api.appstoreconnect.apple.com/v1/devices",
+              data=body,
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request) as response:
+                  print(f"Registered CI device ({response.status}).")
+          except urllib.error.HTTPError as error:
+              if error.code == 409:
+                  print("CI device is already registered.")
+              else:
+                  detail = error.read().decode("utf-8", "replace")[:500]
+                  raise SystemExit(f"Could not register a CI device ({error.code}): {detail}")
+          PY
+
       - name: Archive
         if: steps.gate.outputs.skip != 'true'
         env:
@@ -111,6 +216,7 @@ jobs:
             -project TVRemote.xcodeproj \
             -scheme TVRemote \
             -configuration Release \
+            -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/TVRemote.xcarchive" \
             -allowProvisioningUpdates \

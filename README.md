@@ -78,7 +78,7 @@ TestFlight secrets (repository Actions secrets, never committed):
 
 The workflow writes the `.p8` to a temp file with mode `600`, uses it, and deletes it. It does not print the key. If any of those secrets are missing, the TestFlight job skips and says which names are missing instead of failing the build.
 
-The App Store Connect app for `com.zenithworkspaces.tvremote` already exists (Apple ID 6834946756). The workflow does not create it. Archive uses `-allowProvisioningUpdates` and the API key so Xcode can create the distribution certificate and profile. The API key needs permission to manage signing and upload builds (Admin or App Manager).
+The App Store Connect app for `com.zenithworkspaces.tvremote` already exists (Apple ID 6834946756). The workflow does not create it. It selects Xcode 26 or newer on the `macos-15` runner, because App Store Connect rejects binaries built with the iOS 18 SDK. Archive uses automatic signing and `-allowProvisioningUpdates` with the API key so Xcode can create the distribution certificate and profile. The first archive also registers one placeholder device named "No Ads Remote CI", because automatic signing cannot create a profile when the team has no devices. The API key needs Admin access so it can manage certificates, profiles, and devices, and upload builds.
 
 ## What you still need to do
 
