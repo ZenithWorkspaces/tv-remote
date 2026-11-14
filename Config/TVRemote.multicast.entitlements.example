@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	Optional. Do not add this to the signed app until the App ID
+	com.zenithworkspaces.tvremote has the Multicast Networking capability
+	on team 938ZF88Q6G. Without that capability, signing fails.
+	The app discovers TVs without this entitlement by unicast SSDP and
+	by scanning the local /24 on known TV ports.
+	-->
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
+</dict>
+</plist>
