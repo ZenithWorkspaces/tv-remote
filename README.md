@@ -1,8 +1,8 @@
-# TV Remote
+# No Ads Remote
 
 Ad-free universal TV remote for iPhone. It stays on your Wi-Fi: no accounts, no analytics, no ads. Big portrait controls, a swipe pad, and a row of streaming apps. Roku and LG webOS are the ones to rely on. Samsung, Sony, and Vizio are beta. Android TV and Fire TV can be saved, but their buttons are off until those protocols are finished.
 
-Bundle id `com.zenithworkspaces.tvremote`. Display name **TV Remote**. Minimum iOS 17. iPhone, portrait, dark.
+Bundle id `com.zenithworkspaces.tvremote`. Display name **No Ads Remote**. Minimum iOS 17. iPhone, portrait, dark.
 
 ## What works
 
@@ -27,8 +27,8 @@ The last TV you used is opened again next launch. Saved TVs stay in a switcher s
 Put the phone on the same Wi-Fi as the TV.
 
 - **Roku.** Nothing to pair. On the Roku, set *Settings → System → Advanced system settings → Control by mobile apps* to *Enabled* (or *Permissive*). *Limited* will refuse keypresses.
-- **LG.** The first connection asks you to allow **TV Remote** on the TV screen. After that, the client key is reused. Power-on needs the MAC address, which the app stores the first time a connection succeeds while the TV is on. If Wake-on-LAN doesn't turn the set on, enable *Mobile TV On* / LG Connect Apps on the TV.
-- **Samsung (beta).** Allow the device named TV Remote on the TV. Later launches reuse the token.
+- **LG.** The first connection asks you to allow **No Ads Remote** on the TV screen. After that, the client key is reused. Power-on needs the MAC address, which the app stores the first time a connection succeeds while the TV is on. If Wake-on-LAN doesn't turn the set on, enable *Mobile TV On* / LG Connect Apps on the TV.
+- **Samsung (beta).** Allow the device named No Ads Remote on the TV. Later launches reuse the token.
 - **Sony (beta).** On the TV: *Settings → Network → Home network setup → IP control*. Turn on Simple IP control and set Authentication to *Normal and Pre-Shared Key*. Type that key into the app.
 - **Vizio (beta).** The app starts pairing and the TV shows a PIN. Enter it in the app.
 - **Not found.** Same Wi-Fi, TV on, then Scan Wi-Fi or Add by IP. If a socket drops after a good connection, the app retries a few times and then tells you it couldn't reconnect.
@@ -78,12 +78,10 @@ TestFlight secrets (repository Actions secrets, never committed):
 
 The workflow writes the `.p8` to a temp file with mode `600`, uses it, and deletes it. It does not print the key. If any of those secrets are missing, the TestFlight job skips and says which names are missing instead of failing the build.
 
-Create the App Store Connect app for `com.zenithworkspaces.tvremote` yourself (the workflow does not create it). The API key needs permission to manage signing and upload builds (Admin or App Manager). The first upload also needs the bundle id registered; automatic signing can create the App ID when the key is allowed to.
+The App Store Connect app for `com.zenithworkspaces.tvremote` already exists (Apple ID 6834946756). The workflow does not create it. Archive uses `-allowProvisioningUpdates` and the API key so Xcode can create the distribution certificate and profile. The API key needs permission to manage signing and upload builds (Admin or App Manager).
 
 ## What you still need to do
 
-1. Merge this to `main` when CI is green.
-2. Add the four Actions secrets above.
-3. Finish the App Store Connect record for `com.zenithworkspaces.tvremote` if it isn't there yet.
-4. Optional: request the multicast networking entitlement, then add `Config/TVRemote.multicast.entitlements.example` to the app target. Discovery already works without it.
-5. On the TVs, turn on the control settings in the pairing section. Roku and LG are the ones that are meant to be solid.
+1. Merge to `main` when you want the TestFlight workflow to run. A push to `main` archives and uploads. `workflow_dispatch` does the same.
+2. Optional: request the multicast networking entitlement, then add `Config/TVRemote.multicast.entitlements.example` to the app target. Discovery already works without it.
+3. On the TVs, turn on the control settings in the pairing section. Roku and LG are the ones that are meant to be solid.

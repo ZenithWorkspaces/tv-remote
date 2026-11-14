@@ -82,7 +82,7 @@ struct RemoteView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.activeDevice?.name ?? "TV Remote")
+                Text(session.activeDevice?.name ?? "No Ads Remote")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -310,10 +310,10 @@ struct RemoteView: View {
             Image(systemName: "tv")
                 .font(.system(size: 56, weight: .regular))
                 .foregroundStyle(Color.remoteAccent)
-            Text("No TV yet")
+            Text("No Ads Remote")
                 .font(.system(size: 32, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
-            Text(session.isScanning ? "Looking on this Wi-Fi…" : "Scan the network or add a TV by its IP address.")
+            Text(session.isScanning ? "Looking on this Wi-Fi…" : "No TV yet. Scan the network or add one by IP address.")
                 .font(.system(size: 16, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)

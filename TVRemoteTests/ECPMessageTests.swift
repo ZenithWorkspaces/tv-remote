@@ -73,13 +73,13 @@ final class ECPMessageTests: XCTestCase {
         XCTAssertEqual(params["Cmd"] as? String, "Click")
         XCTAssertEqual(params["TypeOfRemote"] as? String, "SendRemoteKey")
 
-        let url = try XCTUnwrap(SamsungRemote.websocketURL(host: "10.0.0.8", secure: true, name: "TV Remote", token: "abc"))
+        let url = try XCTUnwrap(SamsungRemote.websocketURL(host: "10.0.0.8", secure: true, name: "No Ads Remote", token: "abc"))
         XCTAssertEqual(url.scheme, "wss")
         XCTAssertEqual(url.port, 8002)
         XCTAssertEqual(url.path, "/api/v2/channels/samsung.remote.control")
         XCTAssertTrue(url.query?.contains("token=abc") == true)
 
-        let plain = try XCTUnwrap(SamsungRemote.websocketURL(host: "10.0.0.8", secure: false, name: "TV Remote", token: nil))
+        let plain = try XCTUnwrap(SamsungRemote.websocketURL(host: "10.0.0.8", secure: false, name: "No Ads Remote", token: nil))
         XCTAssertEqual(plain.scheme, "ws")
         XCTAssertEqual(plain.port, 8001)
         XCTAssertFalse(plain.query?.contains("token=") == true)

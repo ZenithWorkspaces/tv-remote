@@ -37,7 +37,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "TestFlight upload skipped. Missing GitHub Actions secrets: ${missing[*]}"
             echo "Add ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8, and APPLE_TEAM_ID under Settings → Secrets and variables → Actions, then re-run this workflow."
-            echo "ASC_KEY_P8 may be the raw .p8 PEM or its base64. The App Store Connect app record for com.zenithworkspaces.tvremote is created separately."
+            echo "ASC_KEY_P8 may be the raw .p8 PEM or its base64. Upload targets the existing App Store Connect app for this bundle id (Apple ID 6834946756)."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "App Store Connect secrets are present. Continuing to archive."
@@ -82,7 +82,8 @@ jobs:
                   text = base64.b64decode(raw, validate=False).decode("utf-8")
               except Exception:
                   text = raw
-          text = text.replace("\\n", "\n").strip() + "\n"
+          text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+          text = text.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
           if "PRIVATE KEY" not in text:
               raise SystemExit("ASC_KEY_P8 is not a PEM private key. Provide the raw .p8 or its base64.")
           path = "/tmp/AuthKey.p8"

@@ -204,7 +204,7 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         let type = object["type"] as? String ?? ""
         let payload = object["payload"] as? [String: Any] ?? [:]
         if payload["pairingType"] as? String == "PROMPT" {
-            emit(.pairingRequired(.acceptOnTV("Look at the LG TV and allow TV Remote.")))
+            emit(.pairingRequired(.acceptOnTV("Look at the LG TV and allow No Ads Remote.")))
         }
         if type == "registered" || payload["client-key"] != nil && type == "response" && object["id"] as? String == "register_0" {
             if let key = payload["client-key"] as? String, !key.isEmpty {

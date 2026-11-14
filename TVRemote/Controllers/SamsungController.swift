@@ -3,7 +3,7 @@ import Foundation
 final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLSessionWebSocketDelegate {
     var onEvent: ((ControllerEvent) -> Void)?
 
-    private let remoteName = "TV Remote"
+    private let remoteName = "No Ads Remote"
     private var host = ""
     private var deviceID = ""
     private var secrets: SecretProviding?
@@ -67,7 +67,7 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
         if stopped || connected { return }
         if await attempt(secure: false, token: nil) { return }
         if !stopped && !connected {
-            emit(.notFound("Samsung TV not found at \(host). Turn it on and allow TV Remote if the TV asks."))
+            emit(.notFound("Samsung TV not found at \(host). Turn it on and allow No Ads Remote if the TV asks."))
         }
     }
 
@@ -148,7 +148,7 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
                 allowFallback = false
                 connected = false
                 openOnce?.resume(false)
-                emit(.pairingRequired(.acceptOnTV("Allow TV Remote on the Samsung screen, then it will connect.")))
+                emit(.pairingRequired(.acceptOnTV("Allow No Ads Remote on the Samsung screen, then it will connect.")))
             }
         }
     }
@@ -185,7 +185,7 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
         guard webSocketTask === socket else { return }
         let saved = secrets?.string(for: SecretAccount.samsungToken(deviceID)) ?? ""
         if saved.isEmpty {
-            emit(.pairingRequired(.acceptOnTV("Allow TV Remote on the Samsung TV.")))
+            emit(.pairingRequired(.acceptOnTV("Allow No Ads Remote on the Samsung TV.")))
         }
         receive()
     }

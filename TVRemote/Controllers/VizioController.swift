@@ -99,7 +99,7 @@ final class VizioController: TVControlling {
     }
 
     private func startPairing() async {
-        let body = VizioSmartCast.startPairingObject(deviceID: vizioDeviceID, name: "TV Remote")
+        let body = VizioSmartCast.startPairingObject(deviceID: vizioDeviceID, name: "No Ads Remote")
         guard let data = await request(path: "/pairing/start", method: "PUT", body: body, auth: nil),
               let object = JSONBox.object(data) else {
             emit(.notFound("Vizio at \(host) did not start pairing."))
