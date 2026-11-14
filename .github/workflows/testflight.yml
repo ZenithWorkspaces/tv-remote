@@ -5,8 +5,6 @@ on:
   push:
     branches:
       - main
-      # Temporary: prove the signing fix before it is merged. Remove after the archive succeeds.
-      - cursor/fix-testflight-signing-1041
 
 concurrency:
   group: testflight-${{ github.workflow }}-${{ github.ref }}
