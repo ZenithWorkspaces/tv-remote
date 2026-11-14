@@ -265,10 +265,22 @@ enum LGSSAP {
         LGPayload(strings: ["text": text], ints: ["replace": 0])
     }
 
-    static func registerObject(clientKey: String?) -> [String: Any] {
+    enum PairingMode: String {
+        case pin = "PIN"
+        case prompt = "PROMPT"
+    }
+
+    static let setPinURI = "ssap://pairing/setPin"
+    static let setPinRequestID = "pairing_pin"
+
+    static func setPinPayload(_ pin: String) -> LGPayload {
+        LGPayload(strings: ["pin": pin])
+    }
+
+    static func registerObject(clientKey: String?, pairingType: PairingMode = .pin) -> [String: Any] {
         var payload: [String: Any] = [
             "forcePairing": false,
-            "pairingType": "PROMPT",
+            "pairingType": pairingType.rawValue,
             "manifest": manifest()
         ]
         if let clientKey, !clientKey.isEmpty {
@@ -281,8 +293,8 @@ enum LGSSAP {
         ]
     }
 
-    static func registerData(clientKey: String?) -> Data {
-        JSONBox.data(registerObject(clientKey: clientKey))
+    static func registerData(clientKey: String?, pairingType: PairingMode = .pin) -> Data {
+        JSONBox.data(registerObject(clientKey: clientKey, pairingType: pairingType))
     }
 
     static var defaultInputs: [TVInput] {

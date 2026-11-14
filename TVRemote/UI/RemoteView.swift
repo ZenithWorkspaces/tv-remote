@@ -610,15 +610,29 @@ private struct PairingSheet: View {
                     .font(.system(size: 16, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.72))
                 if needsEntry {
-                    SecureField(entryTitle, text: $session.pairingDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(isPIN ? .numberPad : .asciiCapable)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    if isPIN {
+                        TextField(entryTitle, text: $session.pairingDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } else {
+                        SecureField(entryTitle, text: $session.pairingDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.asciiCapable)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    if let pairingError = session.pairingError, !pairingError.isEmpty {
+                        Text(pairingError)
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.remoteDanger)
+                    }
                     Button("Continue") {
                         session.submitPairing()
                     }
                     .buttonStyle(RemoteFillStyle(tint: .remoteAccent))
+                    .disabled(session.pairingDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 Spacer()
             }

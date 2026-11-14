@@ -47,6 +47,7 @@ final class RemoteSession {
 
     var pairing: PairingRequest?
     var pairingDraft = ""
+    var pairingError: String?
     var showManualAdd = false
     var showKeyboard = false
     var showInputs = false
@@ -195,12 +196,14 @@ final class RemoteSession {
     }
 
     func submitPairing() {
+        pairingError = nil
         let value = pairingDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         controller?.submitPairing(value)
     }
 
     func cancelPairing() {
         pairing = nil
+        pairingError = nil
         connectGeneration += 1
         controller?.disconnect()
         controller = nil
@@ -344,6 +347,7 @@ final class RemoteSession {
             reconnectAttempt = 0
             suppressReconnect = false
             pairing = nil
+            pairingError = nil
             linkState = .connected
             statusText = "Connected"
         case let .notFound(message):
@@ -359,11 +363,17 @@ final class RemoteSession {
             scheduleReconnect(fallback: message)
         case let .pairingRequired(kind):
             linkState = .pairing
+            pairingError = nil
             statusText = pairingStatus(kind)
             if pairing?.kind != kind {
                 pairingDraft = ""
                 pairing = PairingRequest(kind: kind)
             }
+        case let .pairingRejected(text):
+            linkState = .pairing
+            pairingError = text
+            pairingDraft = ""
+            statusText = text
         case let .inputs(found):
             var seen = Set<String>()
             inputs = found.filter { seen.insert($0.id).inserted }
