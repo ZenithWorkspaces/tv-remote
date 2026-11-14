@@ -1,0 +1,186 @@
+name: TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: testflight-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    name: Archive and upload
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check App Store Connect secrets
+        id: gate
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -z "${ASC_KEY_ID}" ] && missing+=(ASC_KEY_ID)
+          [ -z "${ASC_ISSUER_ID}" ] && missing+=(ASC_ISSUER_ID)
+          [ -z "${ASC_KEY_P8}" ] && missing+=(ASC_KEY_P8)
+          [ -z "${APPLE_TEAM_ID}" ] && missing+=(APPLE_TEAM_ID)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "TestFlight upload skipped. Missing GitHub Actions secrets: ${missing[*]}"
+            echo "Add ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8, and APPLE_TEAM_ID under Settings → Secrets and variables → Actions, then re-run this workflow."
+            echo "ASC_KEY_P8 may be the raw .p8 PEM or its base64. Upload targets the existing App Store Connect app for this bundle id (Apple ID 6834946756)."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "App Store Connect secrets are present. Continuing to archive."
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          if [ -d /Applications/Xcode.app ]; then
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        if: steps.gate.outputs.skip != 'true'
+        run: xcodegen generate
+
+      - name: Write API key
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import base64, os, stat
+          raw = os.environ.get("ASC_KEY_P8", "")
+          text = raw
+          if "PRIVATE KEY" not in text:
+              try:
+                  text = base64.b64decode(raw, validate=False).decode("utf-8")
+              except Exception:
+                  text = raw
+          text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+          text = text.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
+          if "PRIVATE KEY" not in text:
+              raise SystemExit("ASC_KEY_P8 is not a PEM private key. Provide the raw .p8 or its base64.")
+          path = "/tmp/AuthKey.p8"
+          flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+          fd = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
+          try:
+              os.write(fd, text.encode("utf-8"))
+          finally:
+              os.close(fd)
+          os.chmod(path, stat.S_IRUSR)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"ASC_KEY_PATH={path}\n")
+          print("Wrote the App Store Connect API key to a temporary file.")
+          PY
+
+      - name: Archive
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project TVRemote.xcodeproj \
+            -scheme TVRemote \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/TVRemote.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
+            archive
+
+      - name: Export and upload
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import os
+          team = os.environ["APPLE_TEAM_ID"]
+          plist = """<?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>upload</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>{team}</string>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+          </dict>
+          </plist>
+          """.format(team=team)
+          path = os.path.join(os.environ["RUNNER_TEMP"], "ExportOptions.plist")
+          with open(path, "w", encoding="utf-8") as handle:
+              handle.write(plist)
+          PY
+          mkdir -p "$HOME/private_keys" "$HOME/.private_keys" "$HOME/.appstoreconnect/private_keys"
+          install -m 600 "$ASC_KEY_PATH" "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          install -m 600 "$ASC_KEY_PATH" "$HOME/.private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          install -m 600 "$ASC_KEY_PATH" "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/TVRemote.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Delete API key
+        if: always() && steps.gate.outputs.skip != 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ASC_KEY_PATH:-}" ]; then
+            rm -f "$ASC_KEY_PATH"
+          fi
+          if [ -n "${ASC_KEY_ID:-}" ]; then
+            rm -f "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+            rm -f "$HOME/.private_keys/AuthKey_${ASC_KEY_ID}.p8"
+            rm -f "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          fi
+          echo "Removed temporary App Store Connect API key files."

@@ -1,0 +1,85 @@
+import XCTest
+@testable import TVRemote
+
+final class SSAPMessageTests: XCTestCase {
+    func testPointerButtonFraming() {
+        XCTAssertEqual(LGSSAP.pointerButton("HOME"), "type:button\nname:HOME\n\n")
+        XCTAssertEqual(LGSSAP.pointerButton("ENTER"), "type:button\nname:ENTER\n\n")
+        XCTAssertEqual(LGSSAP.pointerButton("FASTFORWARD"), "type:button\nname:FASTFORWARD\n\n")
+    }
+
+    func testVolumeRequestJSON() throws {
+        let data = LGSSAP.requestData(id: "7", uri: "ssap://audio/volumeUp")
+        let object = try XCTUnwrap(JSONBox.object(data))
+        XCTAssertEqual(object["type"] as? String, "request")
+        XCTAssertEqual(object["id"] as? String, "7")
+        XCTAssertEqual(object["uri"] as? String, "ssap://audio/volumeUp")
+        XCTAssertNotNil(object["payload"] as? [String: Any])
+    }
+
+    func testLaunchAndTextPayloads() throws {
+        let launch = LGSSAP.requestData(id: "1", uri: LGSSAP.launchURI, payload: LGSSAP.launchPayload(appID: "netflix"))
+        let launchObject = try XCTUnwrap(JSONBox.object(launch))
+        XCTAssertEqual(launchObject["uri"] as? String, "ssap://system.launcher/launch")
+        let launchPayload = try XCTUnwrap(launchObject["payload"] as? [String: Any])
+        XCTAssertEqual(launchPayload["id"] as? String, "netflix")
+
+        let text = LGSSAP.requestData(id: "2", uri: LGSSAP.insertTextURI, payload: LGSSAP.textPayload("hi"))
+        let textObject = try XCTUnwrap(JSONBox.object(text))
+        let textPayload = try XCTUnwrap(textObject["payload"] as? [String: Any])
+        XCTAssertEqual(textPayload["text"] as? String, "hi")
+        XCTAssertEqual(textPayload["replace"] as? Int, 0)
+    }
+
+    func testRegisterOmitsClientKeyUntilPaired() throws {
+        let fresh = try XCTUnwrap(JSONBox.object(LGSSAP.registerData(clientKey: nil)))
+        XCTAssertEqual(fresh["type"] as? String, "register")
+        XCTAssertEqual(fresh["id"] as? String, "register_0")
+        let payload = try XCTUnwrap(fresh["payload"] as? [String: Any])
+        XCTAssertNil(payload["client-key"])
+        XCTAssertEqual(payload["pairingType"] as? String, "PROMPT")
+        XCTAssertEqual(payload["forcePairing"] as? Bool, false)
+
+        let saved = try XCTUnwrap(JSONBox.object(LGSSAP.registerData(clientKey: "abc-key")))
+        let savedPayload = try XCTUnwrap(saved["payload"] as? [String: Any])
+        XCTAssertEqual(savedPayload["client-key"] as? String, "abc-key")
+    }
+
+    func testRegisterManifestKeepsSignedIdentity() throws {
+        let object = try XCTUnwrap(JSONBox.object(LGSSAP.registerData(clientKey: nil)))
+        let payload = try XCTUnwrap(object["payload"] as? [String: Any])
+        let manifest = try XCTUnwrap(payload["manifest"] as? [String: Any])
+        let signed = try XCTUnwrap(manifest["signed"] as? [String: Any])
+        XCTAssertEqual(signed["appId"] as? String, "com.lge.test")
+        XCTAssertEqual(signed["vendorId"] as? String, "com.lge")
+        XCTAssertEqual(signed["serial"] as? String, "2f930e2d2cfe083771f68e4fe7bb07")
+        let names = try XCTUnwrap(signed["localizedAppNames"] as? [String: Any])
+        XCTAssertEqual(names[""] as? String, "LG Remote App")
+        XCTAssertEqual(names["ko-KR"] as? String, "리모컨 앱")
+        let signatures = try XCTUnwrap(manifest["signatures"] as? [[String: Any]])
+        let signature = try XCTUnwrap(signatures.first?["signature"] as? String)
+        XCTAssertTrue(signature.hasPrefix("eyJhbGdvcml0aG0iOiJSU0EtU0hBMjU2"))
+        XCTAssertTrue(signature.hasSuffix("oa7NQnAtw=="))
+        let permissions = try XCTUnwrap(manifest["permissions"] as? [String])
+        XCTAssertTrue(permissions.contains("CONTROL_POWER"))
+        XCTAssertTrue(permissions.contains("CONTROL_AUDIO"))
+    }
+
+    func testChannelAndMediaCommands() {
+        guard case let .request(up, _) = LGSSAP.command(for: .channelUp) else {
+            return XCTFail("channel up")
+        }
+        XCTAssertEqual(up, "ssap://tv/channelUp")
+        guard case let .request(down, _) = LGSSAP.command(for: .volumeDown) else {
+            return XCTFail("volume down")
+        }
+        XCTAssertEqual(down, "ssap://audio/volumeDown")
+        XCTAssertEqual(LGSSAP.command(for: .rewind), .pointer("REWIND"))
+        XCTAssertEqual(LGSSAP.command(for: .fastForward), .pointer("FASTFORWARD"))
+        XCTAssertEqual(LGSSAP.command(for: .menu), .pointer("MENU"))
+        guard case let .request(enter, _) = LGSSAP.command(for: .enter) else {
+            return XCTFail("enter")
+        }
+        XCTAssertEqual(enter, "ssap://com.webos.service.ime/sendEnterKey")
+    }
+}
