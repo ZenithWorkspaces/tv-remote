@@ -37,12 +37,27 @@ final class SSAPMessageTests: XCTestCase {
         XCTAssertEqual(fresh["id"] as? String, "register_0")
         let payload = try XCTUnwrap(fresh["payload"] as? [String: Any])
         XCTAssertNil(payload["client-key"])
-        XCTAssertEqual(payload["pairingType"] as? String, "PROMPT")
+        XCTAssertEqual(payload["pairingType"] as? String, "PIN")
         XCTAssertEqual(payload["forcePairing"] as? Bool, false)
 
         let saved = try XCTUnwrap(JSONBox.object(LGSSAP.registerData(clientKey: "abc-key")))
         let savedPayload = try XCTUnwrap(saved["payload"] as? [String: Any])
         XCTAssertEqual(savedPayload["client-key"] as? String, "abc-key")
+        XCTAssertEqual(savedPayload["pairingType"] as? String, "PIN")
+
+        let prompt = try XCTUnwrap(JSONBox.object(LGSSAP.registerData(clientKey: nil, pairingType: .prompt)))
+        let promptPayload = try XCTUnwrap(prompt["payload"] as? [String: Any])
+        XCTAssertEqual(promptPayload["pairingType"] as? String, "PROMPT")
+    }
+
+    func testSetPinRequest() throws {
+        let data = LGSSAP.requestData(id: LGSSAP.setPinRequestID, uri: LGSSAP.setPinURI, payload: LGSSAP.setPinPayload("482913"))
+        let object = try XCTUnwrap(JSONBox.object(data))
+        XCTAssertEqual(object["type"] as? String, "request")
+        XCTAssertEqual(object["id"] as? String, "pairing_pin")
+        XCTAssertEqual(object["uri"] as? String, "ssap://pairing/setPin")
+        let payload = try XCTUnwrap(object["payload"] as? [String: Any])
+        XCTAssertEqual(payload["pin"] as? String, "482913")
     }
 
     func testRegisterManifestKeepsSignedIdentity() throws {

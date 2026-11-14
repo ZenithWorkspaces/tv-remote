@@ -27,7 +27,7 @@ The last TV you used is opened again next launch. Saved TVs stay in a switcher s
 Put the phone on the same Wi-Fi as the TV.
 
 - **Roku.** Nothing to pair. On the Roku, set *Settings → System → Advanced system settings → Control by mobile apps* to *Enabled* (or *Permissive*). *Limited* will refuse keypresses.
-- **LG.** The first connection asks you to allow **No Ads Remote** on the TV screen. After that, the client key is reused. Power-on needs the MAC address, which the app stores the first time a connection succeeds while the TV is on. If Wake-on-LAN doesn't turn the set on, enable *Mobile TV On* / LG Connect Apps on the TV.
+- **LG.** The TV shows a PIN. Type it in the app. Nothing else has to be pressed on the TV. The client key is saved, so it does not ask again. If that TV cannot do PIN pairing, the app asks you to accept the connection on the TV instead. The small joystick under the TV presses OK. Power-on needs the MAC address, which the app stores the first time a connection succeeds while the TV is on. If Wake-on-LAN doesn't turn the set on, enable *Mobile TV On* / LG Connect Apps on the TV.
 - **Samsung (beta).** Allow the device named No Ads Remote on the TV. Later launches reuse the token.
 - **Sony (beta).** On the TV: *Settings → Network → Home network setup → IP control*. Turn on Simple IP control and set Authentication to *Normal and Pre-Shared Key*. Type that key into the app.
 - **Vizio (beta).** The app starts pairing and the TV shows a PIN. Enter it in the app.

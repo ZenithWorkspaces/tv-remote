@@ -11,6 +11,7 @@ enum ControllerEvent {
     case notFound(String)
     case connectionLost(String)
     case pairingRequired(PairingKind)
+    case pairingRejected(String)
     case apps([InstalledApp])
     case inputs([TVInput])
     case learnedMAC(String)
