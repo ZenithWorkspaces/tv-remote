@@ -53,9 +53,35 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          if [ -d /Applications/Xcode.app ]; then
-            sudo xcode-select -s /Applications/Xcode.app
-          fi
+          # App Store Connect rejects uploads built with the iOS 18 SDK. Use Xcode 26+.
+          python3 - << 'PY'
+          import glob, os, plistlib, subprocess, sys
+          found = []
+          for app in glob.glob("/Applications/Xcode*.app"):
+              plist_path = os.path.join(app, "Contents", "Info.plist")
+              if not os.path.exists(plist_path):
+                  continue
+              with open(plist_path, "rb") as handle:
+                  info = plistlib.load(handle)
+              version = str(info.get("CFBundleShortVersionString", "0"))
+              parts = []
+              for piece in version.split("."):
+                  try:
+                      parts.append(int(piece))
+                  except ValueError:
+                      parts.append(0)
+              found.append((parts, version, app))
+          found.sort()
+          print("Installed Xcode:")
+          for _, version, app in found:
+              print(f"  {version} {app}")
+          chosen = [item for item in found if item[0] and item[0][0] >= 26]
+          if not chosen:
+              sys.exit("Xcode 26 or newer is required to upload to App Store Connect.")
+          version, app = chosen[-1][1], chosen[-1][2]
+          print(f"Selecting Xcode {version}")
+          subprocess.check_call(["sudo", "xcode-select", "-s", app])
+          PY
           xcodebuild -version
 
       - name: Install XcodeGen
