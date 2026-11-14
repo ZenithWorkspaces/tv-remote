@@ -345,7 +345,7 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         let failedRequest = type == "error" && (id == LGSSAP.setPinRequestID || awaitingPinCheck)
         guard failedResponse || failedRequest else { return false }
         let text = ((payload["errorText"] as? String) ?? error ?? "").lowercased()
-        if text.contains("not support") || text.contains("unknown") && text.contains("pair") {
+        if text.contains("not support") || (text.contains("unknown") && text.contains("pair")) {
             return false
         }
         return id == LGSSAP.setPinRequestID || awaitingPinCheck || text.contains("pin")
