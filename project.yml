@@ -27,6 +27,7 @@ settings:
       ENABLE_TESTABILITY: YES
     Release:
       CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: Apple Distribution
       DEVELOPMENT_TEAM: 938ZF88Q6G
       CODE_SIGNING_ALLOWED: YES
       CODE_SIGNING_REQUIRED: YES
