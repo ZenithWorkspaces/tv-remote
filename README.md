@@ -1,6 +1,6 @@
 # No Ads Remote
 
-Ad-free universal TV remote for iPhone. It stays on your Wi-Fi: no accounts, no analytics, no ads. Big portrait controls, a swipe pad, and a row of streaming apps. Roku and LG webOS are the ones to rely on. Samsung, Sony, and Vizio are beta. Android TV and Fire TV can be saved, but their buttons are off until those protocols are finished.
+Ad-free TV remote for iPhone. It stays on your Wi-Fi: no accounts, no analytics, no ads. Portrait controls, a full-width direction pad, and a row of streaming apps you can reorder. The app lists and controls LG webOS and Roku only.
 
 Bundle id `com.zenithworkspaces.tvremote`. Display name **No Ads Remote**. Minimum iOS 17. iPhone, portrait, dark.
 
@@ -9,18 +9,18 @@ Bundle id `com.zenithworkspaces.tvremote`. Display name **No Ads Remote**. Minim
 | TV | Status | How control works |
 | --- | --- | --- |
 | Roku | Ready | ECP on port 8060. `POST /keypress/…`, `POST /launch/{appId}`, `GET /query/apps`. Channel ids are taken from the TV's installed apps when the name matches, otherwise a known fallback. |
-| LG webOS | Ready | SSAP over `wss://tv:3001` (self-signed cert accepted for that host only). Falls back to `ws://tv:3000`. One-time Allow prompt on the TV. The client key is stored in the Keychain. D-pad, OK, back, home, and media keys go out the pointer socket. Volume, mute, channel, input, power off, app launch, and the keyboard use `ssap://`. Power on is Wake-on-LAN after the MAC has been learned. |
-| Samsung Tizen | Beta | Websocket remote on `wss://tv:8002`, then `ws://tv:8001`. The TV shows an allow prompt; the token is kept in the Keychain. |
-| Sony Bravia | Beta | IRCC `POST /sony/IRCC` with the TV's pre-shared key (`X-Auth-PSK`). |
-| Vizio SmartCast | Beta | Pairing PIN on port 7345 (HTTPS) or 9000 (HTTP). The auth token is kept in the Keychain. |
-| Android / Google TV | Saved only | Discovered (including `_androidtvremote2._tcp`). Remote v2 pairing (ports 6466/6467, protobuf) is not finished, so the pad stays disabled. |
-| Fire TV | Saved only | Can be found from discovery. There is no supported local remote API in this build. |
+| LG webOS | Ready | SSAP over `wss://tv:3001` (self-signed cert accepted for that host only). Falls back to `ws://tv:3000`. The TV shows a PIN; the client key is stored in the Keychain. D-pad, OK, back, home, and media keys go out the pointer socket. Volume, mute, channel, input, power off, app launch, and the keyboard use `ssap://`. Power on is Wake-on-LAN after the MAC has been learned. |
+| Samsung Tizen | Not offered | Websocket code remains in the project. The app does not list Samsung sets. |
+| Sony Bravia | Not offered | IRCC code remains in the project. The app does not list Sony sets. |
+| Vizio SmartCast | Not offered | Pairing code remains in the project. The app does not list Vizio sets. |
+| Android / Google TV | Not offered | Discovery hits are ignored. Remote v2 pairing is not finished. |
+| Fire TV | Not offered | Bonjour names such as `amzn.dmgr:…` are ignored. There is no supported local remote API. |
 
-Buttons: power, input, home, back, d-pad and OK, swipe pad, volume, mute, channel, play/pause, rewind, fast-forward, menu, and keyboard where the TV supports it (Roku literal `Lit_` keys, LG IME, Samsung text). Light haptics. Keypresses are fire-and-forget on a kept-open session.
+The screen, top to bottom: the TV name with a status dot, Power / Home / Input / Back, Menu / Keyboard, app shortcuts, then a full-width direction pad with OK. Volume, mute, play/pause, and channel sit under the pad. Holding a direction repeats that key. Light haptics. Keypresses are fire-and-forget on a kept-open session.
 
-App row: Netflix, Prime Video, Disney+, YouTube, YouTube TV, Max, Hulu, Peacock, Paramount+, Apple TV, Spotify.
+App row: Netflix, Prime Video, Disney+, YouTube, YouTube TV, Max, Hulu, Peacock, Paramount+, Apple TV, Spotify. Long-press to reorder or hide. The name you give a TV is saved on this phone.
 
-The last TV you used is opened again next launch. Saved TVs stay in a switcher so an LG in one room and a Roku in another are one tap apart.
+The last TV you used is opened again next launch. Tap the name while connected to switch TVs, rename, or add another.
 
 ## Pairing
 
@@ -28,10 +28,7 @@ Put the phone on the same Wi-Fi as the TV.
 
 - **Roku.** Nothing to pair. On the Roku, set *Settings → System → Advanced system settings → Control by mobile apps* to *Enabled* (or *Permissive*). *Limited* will refuse keypresses.
 - **LG.** The TV shows a PIN. Type it in the app. Nothing else has to be pressed on the TV. The client key is saved, so it does not ask again. If that TV cannot do PIN pairing, the app asks you to accept the connection on the TV instead. The small joystick under the TV presses OK. Power-on needs the MAC address, which the app stores the first time a connection succeeds while the TV is on. If Wake-on-LAN doesn't turn the set on, enable *Mobile TV On* / LG Connect Apps on the TV.
-- **Samsung (beta).** Allow the device named No Ads Remote on the TV. Later launches reuse the token.
-- **Sony (beta).** On the TV: *Settings → Network → Home network setup → IP control*. Turn on Simple IP control and set Authentication to *Normal and Pre-Shared Key*. Type that key into the app.
-- **Vizio (beta).** The app starts pairing and the TV shows a PIN. Enter it in the app.
-- **Not found.** Same Wi-Fi, TV on, then Scan Wi-Fi or Add by IP. If a socket drops after a good connection, the app retries a few times and then tells you it couldn't reconnect.
+- **Not found.** Same Wi-Fi, TV on, then Scan Wi-Fi or Add by IP. If a socket drops after a good connection, the app retries a few times and then tells you it couldn't reconnect. Samsung, Sony, Vizio, Android TV, and Fire TV are not listed.
 
 ## Discovery without the multicast entitlement
 

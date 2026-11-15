@@ -109,6 +109,7 @@ final class DiscoveryService {
     }
 
     private func deliver(_ device: TVDevice) {
+        guard device.brand == .roku || device.brand == .lg else { return }
         DispatchQueue.main.async { [weak self] in
             self?.onFound?(device)
         }
@@ -146,17 +147,10 @@ final class DiscoveryService {
                 guard let host else { return }
                 Task { [weak self] in
                     guard let self else { return }
-                    if serviceType.contains("androidtvremote") {
-                        let name = instanceName.isEmpty ? "Android TV" : instanceName
-                        self.deliver(TVDevice.make(name: name, host: host, brand: .androidtv))
-                        return
-                    }
                     if let device = await PortProbe.identify(host: host, timeout: 0.45, suggestedName: instanceName) {
                         self.deliver(device)
-                    } else if serviceType.contains("amzn") {
-                        let name = instanceName.isEmpty ? "Fire TV" : instanceName
-                        self.deliver(TVDevice.make(name: name, host: host, brand: .firetv))
                     }
+                    // `_amzn-wplay` often advertises as `amzn.dmgr:<id>`. Those devices are not controllable here.
                 }
             case .failed(_):
                 self.forget(connection)
