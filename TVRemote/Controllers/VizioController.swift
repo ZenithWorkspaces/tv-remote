@@ -50,6 +50,10 @@ final class VizioController: TVControlling {
     }
 
     func press(_ key: RemoteKey) {
+        guard VizioSmartCast.key(for: key) != nil else {
+            emit(.message("This Vizio doesn't use that button."))
+            return
+        }
         if key == .playPause {
             sendKey(key, playNext: playNext)
             playNext.toggle()
@@ -59,7 +63,17 @@ final class VizioController: TVControlling {
     }
 
     func launch(_ shortcut: AppShortcut) {
-        emit(.message("Open \(shortcut.title) from the Vizio home screen. App launch varies by model."))
+        guard let spec = VizioSmartCast.app(for: shortcut), let auth, connected else {
+            emit(.message("Open \(shortcut.title) from the Vizio home screen. App launch varies by model."))
+            return
+        }
+        let body = VizioSmartCast.launchObject(appID: spec.id, nameSpace: spec.nameSpace)
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.request(path: "/app/launch", method: "PUT", body: body, auth: auth) == nil {
+                self.emit(.message("Open \(shortcut.title) from the Vizio home screen. This model didn't accept the app launch."))
+            }
+        }
     }
 
     func select(input: TVInput) {

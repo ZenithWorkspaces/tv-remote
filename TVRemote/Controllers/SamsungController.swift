@@ -40,8 +40,15 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
     }
 
     func press(_ key: RemoteKey) {
-        guard let name = SamsungRemote.keyName(for: key) else { return }
+        guard let name = SamsungRemote.keyName(for: key) else {
+            emit(.message(SamsungRemote.unavailableMessage(for: key)))
+            return
+        }
         send(SamsungRemote.clickObject(key: name))
+    }
+
+    func deleteBackward() {
+        send(SamsungRemote.textObject("\u{8}"))
     }
 
     func launch(_ shortcut: AppShortcut) {
@@ -139,6 +146,9 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
                 timeoutTask?.cancel()
                 emit(.connected)
                 openOnce?.resume(true)
+                Task { [weak self] in
+                    await self?.loadMetadata()
+                }
             }
             return
         }
@@ -149,6 +159,22 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
                 connected = false
                 openOnce?.resume(false)
                 emit(.pairingRequired(.acceptOnTV("Allow No Ads Remote on the Samsung screen, then it will connect.")))
+            }
+        }
+    }
+
+    private func loadMetadata() async {
+        if let url = URL(string: "http://\(host):8001/api/v2/"),
+           let data = await HTTPProbe.get(url: url, timeout: 3, trustHost: nil),
+           let mac = MACAddress.find(in: JSONBox.object(data) ?? [:]) {
+            emit(.learnedMAC(mac))
+        }
+        if let url = URL(string: "http://\(host):8001/api/v2/applications"),
+           let data = await HTTPProbe.get(url: url, timeout: 3, trustHost: nil) {
+            let found = SamsungRemote.parseApplications(data)
+            if !found.isEmpty {
+                apps = found
+                emit(.apps(found))
             }
         }
     }
