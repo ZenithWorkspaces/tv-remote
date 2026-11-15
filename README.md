@@ -16,7 +16,7 @@ Bundle id `com.zenithworkspaces.tvremote`. Display name **No Ads Remote**. Minim
 | Android / Google TV | Not offered | Discovery hits are ignored. Remote v2 pairing is not finished. |
 | Fire TV | Not offered | Bonjour names such as `amzn.dmgr:…` are ignored. There is no supported local remote API. |
 
-The screen, top to bottom: the TV name with a status dot, Power / Home / Input / Back, Menu / Keyboard, app shortcuts, then a full-width direction pad with OK. Volume, mute, play/pause, and channel sit under the pad. Holding a direction repeats that key. Light haptics. Keypresses are fire-and-forget on a kept-open session.
+The screen, top to bottom: the TV name with a status dot, Power / Home / Input / Back, Menu / Keyboard, app logos, then a plus-shaped direction pad with OK. Volume, mute, and channel sit in the bottom corners of that pad. Skip previous, rewind, play/pause, fast forward, and skip next sit on the bottom row. Holding a direction repeats that key. Roku skip-previous is Instant Replay; Roku has no skip-next key, so that button is for LG. Light haptics. Keypresses are fire-and-forget on a kept-open session.
 
 App row: Netflix, Prime Video, Disney+, YouTube, YouTube TV, Max, Hulu, Peacock, Paramount+, Apple TV, Spotify. Long-press to reorder or hide. The name you give a TV is saved on this phone.
 

@@ -70,10 +70,10 @@ struct RemoteView: View {
             startingRow
             menuKeyboardRow
             shortcuts
-            DirectionPad { session.press($0) }
+            ControlPad { session.press($0) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
-            volumeChannelRow
+            mediaRow
         }
         .padding(.horizontal, 16)
         .padding(.top, 4)
@@ -237,13 +237,12 @@ struct RemoteView: View {
     private func shortcutTile(_ shortcut: AppShortcut, index: Int) -> some View {
         let style = ShortcutStyle.style(for: shortcut.slug)
         return VStack(spacing: 4) {
-            Text(style.word)
-                .font(.system(size: style.word.count > 9 ? 12 : 14, weight: .heavy, design: .rounded))
-                .foregroundStyle(style.foreground)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .padding(.horizontal, 10)
-                .frame(minWidth: 72, minHeight: 44)
+            Image(style.asset)
+                .resizable()
+                .scaledToFit()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(minWidth: 84, maxWidth: 132, minHeight: 48, maxHeight: 48)
                 .background(style.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .rotationEffect(.degrees(editingShortcuts ? (index.isMultiple(of: 2) ? -2 : 2) : 0))
                 .animation(editingShortcuts ? .easeInOut(duration: 0.14).repeatForever(autoreverses: true) : .default, value: editingShortcuts)
@@ -274,48 +273,25 @@ struct RemoteView: View {
         }
     }
 
-    private var volumeChannelRow: some View {
+    private var mediaRow: some View {
         HStack(spacing: 8) {
-            rocker(
-                lowerTitle: "Vol −", lowerImage: "speaker.minus.fill", lower: .volumeDown,
-                upperTitle: "Vol +", upperImage: "speaker.plus.fill", upper: .volumeUp
-            )
-            symbolKey("Mute", systemImage: "speaker.slash.fill", key: .mute)
-            symbolKey("Play", systemImage: "playpause.fill", key: .playPause)
-            rocker(
-                lowerTitle: "Ch −", lowerImage: "chevron.down", lower: .channelDown,
-                upperTitle: "Ch +", upperImage: "chevron.up", upper: .channelUp
-            )
+            mediaKey("Skip previous", systemImage: "backward.end.fill", key: .skipPrevious, compact: true)
+            mediaKey("Rewind", systemImage: "backward.fill", key: .rewind, compact: false)
+            mediaKey("Play", systemImage: "playpause.fill", key: .playPause, compact: false)
+            mediaKey("Fast forward", systemImage: "forward.fill", key: .fastForward, compact: false)
+            mediaKey("Skip next", systemImage: "forward.end.fill", key: .skipNext, compact: true)
         }
     }
 
-    private func rocker(
-        lowerTitle: String,
-        lowerImage: String,
-        lower: RemoteKey,
-        upperTitle: String,
-        upperImage: String,
-        upper: RemoteKey
-    ) -> some View {
-        HStack(spacing: 0) {
-            rockerHalf(lowerTitle, systemImage: lowerImage, key: lower)
-            Rectangle()
-                .fill(.white.opacity(0.12))
-                .frame(width: 1, height: 28)
-            rockerHalf(upperTitle, systemImage: upperImage, key: upper)
-        }
-        .frame(maxWidth: .infinity, minHeight: 46)
-        .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private func rockerHalf(_ title: String, systemImage: String, key: RemoteKey) -> some View {
+    private func mediaKey(_ title: String, systemImage: String, key: RemoteKey, compact: Bool) -> some View {
         Button {
             session.press(key)
         } label: {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: compact ? 16 : 22, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 46)
+                .frame(maxWidth: compact ? 52 : .infinity, minHeight: compact ? 46 : 54, maxHeight: compact ? 46 : 54)
+                .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous))
         }
         .accessibilityLabel(title)
     }
@@ -348,14 +324,15 @@ struct RemoteView: View {
                 session.press(key)
             }
         } label: {
-            VStack(spacing: 4) {
+            VStack(spacing: 6) {
                 Image(systemName: systemImage)
                     .font(.system(size: 18, weight: .bold))
                 Text(title)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
             }
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, minHeight: 46)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, minHeight: 76)
             .background(tint, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .accessibilityLabel(title)
@@ -363,80 +340,134 @@ struct RemoteView: View {
 
 }
 
-private struct DirectionPad: View {
+private struct ControlPad: View {
     var onPress: (RemoteKey) -> Void
     @State private var held: RemoteKey?
     @State private var repeatTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geo in
-            let size = geo.size
+            let metrics = PadMetrics(size: geo.size)
             ZStack {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(Color.remoteButton)
-                Image(systemName: "chevron.up")
-                    .position(x: size.width / 2, y: size.height * 0.14)
-                Image(systemName: "chevron.down")
-                    .position(x: size.width / 2, y: size.height * 0.86)
-                Image(systemName: "chevron.left")
-                    .position(x: size.width * 0.12, y: size.height / 2)
-                Image(systemName: "chevron.right")
-                    .position(x: size.width * 0.88, y: size.height / 2)
-                Circle()
-                    .fill(held == .ok ? Color.remoteAccent.opacity(0.75) : Color.remoteAccent)
-                    .frame(width: okDiameter(size), height: okDiameter(size))
-                    .overlay {
-                        Text("OK")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                    }
+                plus(metrics)
+                cornerStack(metrics, side: .left)
+                cornerStack(metrics, side: .right)
             }
-            .font(.system(size: 26, weight: .bold))
-            .foregroundStyle(.white.opacity(0.9))
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let next = key(at: value.location, in: size)
-                        guard next != held else { return }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+
+    private func plus(_ metrics: PadMetrics) -> some View {
+        let center = metrics.crossCenter
+        return ZStack {
+            Capsule()
+                .fill(Color.remoteButton)
+                .frame(width: metrics.arm, height: metrics.size.height)
+                .position(x: center.x, y: metrics.size.height / 2)
+            Capsule()
+                .fill(Color.remoteButton)
+                .frame(width: metrics.size.width, height: metrics.arm)
+                .position(x: center.x, y: center.y)
+            Circle()
+                .fill(held == .ok ? Color.remoteAccent.opacity(0.8) : Color.remoteAccent)
+                .frame(width: metrics.arm, height: metrics.arm)
+                .position(x: center.x, y: center.y)
+            Text("OK")
+                .font(.system(size: metrics.arm * 0.28, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .position(x: center.x, y: center.y)
+            chevron("chevron.up", at: metrics.upPoint)
+            chevron("chevron.down", at: metrics.downPoint)
+            chevron("chevron.left", at: metrics.leftPoint)
+            chevron("chevron.right", at: metrics.rightPoint)
+        }
+        .frame(width: metrics.size.width, height: metrics.size.height)
+        .contentShape(PlusHitShape(arm: metrics.arm, crossMidY: center.y))
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let next = metrics.key(at: value.location)
+                    guard next != held else { return }
+                    if let next {
                         startHold(next)
-                    }
-                    .onEnded { _ in
+                    } else {
                         stopHold()
                     }
-            )
-            .accessibilityElement()
-            .accessibilityLabel("Direction pad")
-            .accessibilityAction(named: "Up") { onPress(.up) }
-            .accessibilityAction(named: "Down") { onPress(.down) }
-            .accessibilityAction(named: "Left") { onPress(.left) }
-            .accessibilityAction(named: "Right") { onPress(.right) }
-            .accessibilityAction(named: "OK") { onPress(.ok) }
-            .onDisappear { stopHold() }
-        }
+                }
+                .onEnded { _ in
+                    stopHold()
+                }
+        )
+        .accessibilityElement()
+        .accessibilityLabel("Direction pad")
+        .accessibilityAction(named: "Up") { onPress(.up) }
+        .accessibilityAction(named: "Down") { onPress(.down) }
+        .accessibilityAction(named: "Left") { onPress(.left) }
+        .accessibilityAction(named: "Right") { onPress(.right) }
+        .accessibilityAction(named: "OK") { onPress(.ok) }
+        .accessibilityAction(named: "Volume up") { onPress(.volumeUp) }
+        .accessibilityAction(named: "Volume down") { onPress(.volumeDown) }
+        .accessibilityAction(named: "Mute") { onPress(.mute) }
+        .accessibilityAction(named: "Channel up") { onPress(.channelUp) }
+        .accessibilityAction(named: "Channel down") { onPress(.channelDown) }
+        .onDisappear { stopHold() }
     }
 
-    private func okDiameter(_ size: CGSize) -> CGFloat {
-        min(size.width, size.height) * 0.42
+    private func chevron(_ system: String, at point: CGPoint) -> some View {
+        Image(systemName: system)
+            .font(.system(size: 22, weight: .bold))
+            .foregroundStyle(.white.opacity(0.92))
+            .position(x: point.x, y: point.y)
+            .accessibilityHidden(true)
     }
 
-    private func key(at point: CGPoint, in size: CGSize) -> RemoteKey {
-        let dx = point.x - size.width / 2
-        let dy = point.y - size.height / 2
-        if hypot(dx, dy) <= okDiameter(size) / 2 {
-            return .ok
+    private func cornerStack(_ metrics: PadMetrics, side: PadSide) -> some View {
+        let pocket = metrics.pocket(side)
+        let muteHeight = min(44, pocket.height * 0.32)
+        return Group {
+            if side == .left {
+                VStack(spacing: 4) {
+                    VStack(spacing: 0) {
+                        cornerKey("Volume up", systemImage: "speaker.plus.fill", key: .volumeUp)
+                        Rectangle().fill(.white.opacity(0.12)).frame(height: 1).padding(.horizontal, 8)
+                        cornerKey("Volume down", systemImage: "speaker.minus.fill", key: .volumeDown)
+                    }
+                    .frame(maxHeight: .infinity)
+                    .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    cornerKey("Mute", systemImage: "speaker.slash.fill", key: .mute)
+                        .frame(height: muteHeight)
+                        .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            } else {
+                VStack(spacing: 0) {
+                    cornerKey("Channel up", systemImage: "chevron.up", key: .channelUp)
+                    Rectangle().fill(.white.opacity(0.12)).frame(height: 1).padding(.horizontal, 8)
+                    cornerKey("Channel down", systemImage: "chevron.down", key: .channelDown)
+                }
+                .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
         }
-        if abs(dx) > abs(dy) {
-            return dx >= 0 ? .right : .left
+        .frame(width: pocket.width, height: pocket.height)
+        .position(pocket.center)
+    }
+
+    private func cornerKey(_ title: String, systemImage: String, key: RemoteKey) -> some View {
+        Button {
+            onPress(key)
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        return dy >= 0 ? .down : .up
+        .accessibilityLabel(title)
     }
 
     private func startHold(_ key: RemoteKey) {
         stopHold()
         held = key
         onPress(key)
-        guard key != .ok else { return }
+        guard key == .up || key == .down || key == .left || key == .right else { return }
         repeatTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 350_000_000)
             while !Task.isCancelled {
@@ -453,37 +484,116 @@ private struct DirectionPad: View {
     }
 }
 
+private enum PadSide {
+    case left
+    case right
+}
+
+private struct PadMetrics {
+    var size: CGSize
+
+    var arm: CGFloat {
+        min(size.width, size.height) * 0.32
+    }
+
+    var crossCenter: CGPoint {
+        let pocket = min(112, size.height * 0.40)
+        let midY = min(size.height * 0.46, size.height - pocket - arm / 2)
+        return CGPoint(x: size.width / 2, y: max(arm, midY))
+    }
+
+    var upPoint: CGPoint {
+        CGPoint(x: crossCenter.x, y: (crossCenter.y - arm / 2) / 2)
+    }
+
+    var downPoint: CGPoint {
+        let top = crossCenter.y + arm / 2
+        return CGPoint(x: crossCenter.x, y: (top + size.height) / 2)
+    }
+
+    var leftPoint: CGPoint {
+        CGPoint(x: (crossCenter.x - arm / 2) / 2, y: crossCenter.y)
+    }
+
+    var rightPoint: CGPoint {
+        let left = crossCenter.x + arm / 2
+        return CGPoint(x: (left + size.width) / 2, y: crossCenter.y)
+    }
+
+    func pocket(_ side: PadSide) -> (width: CGFloat, height: CGFloat, center: CGPoint) {
+        let width = max(52, (size.width - arm) / 2 - 10)
+        let top = crossCenter.y + arm / 2
+        let height = max(72, size.height - top - 6)
+        let centerY = size.height - height / 2 - 2
+        let centerX = side == .left ? width / 2 + 2 : size.width - width / 2 - 2
+        return (width, height, CGPoint(x: centerX, y: centerY))
+    }
+
+    func key(at point: CGPoint) -> RemoteKey? {
+        let dx = point.x - crossCenter.x
+        let dy = point.y - crossCenter.y
+        let radius = arm / 2
+        if hypot(dx, dy) <= radius {
+            return .ok
+        }
+        if abs(dx) <= radius, abs(dy) > radius {
+            return dy < 0 ? .up : .down
+        }
+        if abs(dy) <= radius, abs(dx) > radius {
+            return dx < 0 ? .left : .right
+        }
+        return nil
+    }
+}
+
+private struct PlusHitShape: Shape {
+    var arm: CGFloat
+    var crossMidY: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addRoundedRect(
+            in: CGRect(x: rect.midX - arm / 2, y: rect.minY, width: arm, height: rect.height),
+            cornerSize: CGSize(width: arm / 2, height: arm / 2)
+        )
+        path.addRoundedRect(
+            in: CGRect(x: rect.minX, y: crossMidY - arm / 2, width: rect.width, height: arm),
+            cornerSize: CGSize(width: arm / 2, height: arm / 2)
+        )
+        return path
+    }
+}
+
 private struct ShortcutStyle {
-    var word: String
+    var asset: String
     var background: Color
-    var foreground: Color
 
     static func style(for slug: String) -> ShortcutStyle {
         switch slug {
         case "netflix":
-            return ShortcutStyle(word: "Netflix", background: Color(red: 0.08, green: 0.08, blue: 0.08), foreground: Color(red: 0.90, green: 0.04, blue: 0.08))
+            return ShortcutStyle(asset: "LogoNetflix", background: Color(red: 0.08, green: 0.08, blue: 0.08))
         case "prime":
-            return ShortcutStyle(word: "prime", background: Color(red: 0.00, green: 0.66, blue: 0.88), foreground: .white)
+            return ShortcutStyle(asset: "LogoPrime", background: .white)
         case "disney":
-            return ShortcutStyle(word: "Disney+", background: Color(red: 0.07, green: 0.16, blue: 0.45), foreground: .white)
+            return ShortcutStyle(asset: "LogoDisney", background: .white)
         case "youtube":
-            return ShortcutStyle(word: "YouTube", background: Color(red: 0.90, green: 0.04, blue: 0.05), foreground: .white)
+            return ShortcutStyle(asset: "LogoYouTube", background: .white)
         case "youtube-tv":
-            return ShortcutStyle(word: "YouTube TV", background: Color(red: 0.45, green: 0.02, blue: 0.04), foreground: .white)
+            return ShortcutStyle(asset: "LogoYouTubeTV", background: .white)
         case "max":
-            return ShortcutStyle(word: "Max", background: Color(red: 0.00, green: 0.17, blue: 0.91), foreground: .white)
+            return ShortcutStyle(asset: "LogoMax", background: .white)
         case "hulu":
-            return ShortcutStyle(word: "hulu", background: Color(red: 0.11, green: 0.91, blue: 0.51), foreground: .black)
+            return ShortcutStyle(asset: "LogoHulu", background: .black)
         case "peacock":
-            return ShortcutStyle(word: "Peacock", background: Color(red: 0.06, green: 0.06, blue: 0.09), foreground: Color(red: 0.86, green: 0.73, blue: 0.36))
+            return ShortcutStyle(asset: "LogoPeacock", background: .white)
         case "paramount":
-            return ShortcutStyle(word: "Paramount+", background: Color(red: 0.00, green: 0.39, blue: 1.0), foreground: .white)
+            return ShortcutStyle(asset: "LogoParamount", background: .white)
         case "apple-tv":
-            return ShortcutStyle(word: "tv", background: .black, foreground: .white)
+            return ShortcutStyle(asset: "LogoAppleTV", background: .white)
         case "spotify":
-            return ShortcutStyle(word: "Spotify", background: Color(red: 0.11, green: 0.73, blue: 0.33), foreground: .black)
+            return ShortcutStyle(asset: "LogoSpotify", background: Color(red: 0.07, green: 0.07, blue: 0.07))
         default:
-            return ShortcutStyle(word: slug, background: .remoteButton, foreground: .white)
+            return ShortcutStyle(asset: "LogoNetflix", background: .remoteButton)
         }
     }
 }
