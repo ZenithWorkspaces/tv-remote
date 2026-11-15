@@ -53,7 +53,7 @@ xcodegen generate
 open TVRemote.xcodeproj
 ```
 
-Debug is unsigned so CI can build a simulator without certificates. Release uses automatic signing, team `938ZF88Q6G`.
+Debug is unsigned so CI can build a simulator without certificates. The generated Release configuration names team `938ZF88Q6G`. TestFlight overrides the archive to manual signing and does not ask Xcode to create certificates.
 
 Unit tests cover key mapping and the Roku ECP / LG SSAP message builders (plus Samsung, Sony, Vizio, Wake-on-LAN, and SSDP framing).
 
@@ -62,7 +62,7 @@ Unit tests cover key mapping and the Roku ECP / LG SSAP message builders (plus S
 The owner doesn't need a Mac. GitHub Actions on `macos-15` does the build.
 
 - `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. It generates the project, builds, and tests on an iPhone simulator. Unsigned. 30 minute timeout. New runs cancel the previous one on the same ref.
-- `.github/workflows/testflight.yml` runs on pushes to `main` and `workflow_dispatch`. It archives with `xcodebuild -allowProvisioningUpdates` and an App Store Connect API key, exports with method `app-store-connect` and destination `upload`, and sets the build number to `github.run_number`.
+- `.github/workflows/testflight.yml` runs on pushes to `main` and `workflow_dispatch`. It imports one stored Apple Distribution certificate into a temporary keychain, installs the App Store profile `No Ads Remote App Store CI`, archives with manual signing, and exports with method `app-store-connect`, `signingStyle` manual, and destination `upload`. The build number is `github.run_number`, except workflow run 12 publishes build 11 because run 11 failed before anything was uploaded.
 
 TestFlight secrets (repository Actions secrets, never committed):
 
@@ -70,12 +70,15 @@ TestFlight secrets (repository Actions secrets, never committed):
 | --- | --- |
 | `ASC_KEY_ID` | App Store Connect API key id |
 | `ASC_ISSUER_ID` | API issuer id |
-| `ASC_KEY_P8` | The `.p8` private key, raw PEM or base64 |
+| `ASC_KEY_P8` | The `.p8` private key, raw PEM or base64. Used only to upload the build. |
 | `APPLE_TEAM_ID` | Apple team id (`938ZF88Q6G`) |
+| `IOS_DIST_CERT_P12_BASE64` | Base64 of the Apple Distribution `.p12` (PBE-SHA1-3DES / MAC SHA-1) |
+| `IOS_DIST_CERT_PASSWORD` | Password for that `.p12` |
+| `IOS_APPSTORE_PROFILE_BASE64` | Base64 of the App Store profile `No Ads Remote App Store CI` |
 
-The workflow writes the `.p8` to a temp file with mode `600`, uses it, and deletes it. It does not print the key. If any of those secrets are missing, the TestFlight job skips and says which names are missing instead of failing the build.
+The workflow writes the `.p8`, `.p12`, and profile to temp files with mode `600`, uses them, and deletes them. An `always()` step deletes the temporary keychain. It does not print secret values. If any of those secrets are missing, the TestFlight job skips and says which names are missing instead of failing the build.
 
-The App Store Connect app for `com.zenithworkspaces.tvremote` already exists (Apple ID 6834946756). The workflow does not create it. It selects Xcode 26 or newer on the `macos-15` runner, because App Store Connect rejects binaries built with the iOS 18 SDK. Archive uses automatic signing and `-allowProvisioningUpdates` with the API key so Xcode can create the distribution certificate and profile. The first archive also registers one placeholder device named "No Ads Remote CI", because automatic signing cannot create a profile when the team has no devices. The API key needs Admin access so it can manage certificates, profiles, and devices, and upload builds.
+The App Store Connect app for `com.zenithworkspaces.tvremote` already exists (Apple ID 6834946756). The workflow does not create it, and it does not create or revoke certificates or devices. It selects Xcode 26 or newer on the `macos-15` runner, because App Store Connect rejects binaries built with the iOS 18 SDK. The archive uses `CODE_SIGN_STYLE=Manual`, `CODE_SIGN_IDENTITY=Apple Distribution`, team `938ZF88Q6G`, and profile `No Ads Remote App Store CI` (`20c9db5e-011f-4fbd-8d77-3da5fb836214`). The temporary keychain is the only one on the codesign search list, so the older Apple Distribution certificate with the same display name cannot be selected. The API key is installed only so `xcodebuild -exportArchive` can upload.
 
 ## What you still need to do
 
