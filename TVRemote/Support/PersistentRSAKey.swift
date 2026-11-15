@@ -94,7 +94,30 @@ enum ClientCertificate {
 
     static func identity(certificateDER: Data, key: SecKey) -> sec_identity_t? {
         guard let certificate = SecCertificateCreateWithData(nil, certificateDER as CFData) else { return nil }
-        return sec_identity_create(certificate, key)
+        _ = key
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecValueRef as String: certificate,
+            kSecAttrLabel as String: "No Ads Remote"
+        ]
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess || status == errSecDuplicateItem else { return nil }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassIdentity,
+            kSecReturnRef as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        let identities = item as? [SecIdentity] ?? []
+        for identity in identities {
+            var found: SecCertificate?
+            guard SecIdentityCopyCertificate(identity, &found) == errSecSuccess, let found else { continue }
+            if SecCertificateCopyData(found) as Data == certificateDER {
+                return sec_identity_create(identity)
+            }
+        }
+        return nil
     }
 
     private static func subjectPublicKeyInfo(_ pkcs1: Data) -> Data {
