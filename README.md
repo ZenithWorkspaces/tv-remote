@@ -62,7 +62,7 @@ Unit tests cover key mapping and the Roku ECP / LG SSAP message builders (plus S
 The owner doesn't need a Mac. GitHub Actions on `macos-15` does the build.
 
 - `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. It generates the project, builds, and tests on an iPhone simulator. Unsigned. 30 minute timeout. New runs cancel the previous one on the same ref.
-- `.github/workflows/testflight.yml` runs on pushes to `main` and `workflow_dispatch`. It imports one stored Apple Distribution certificate into a temporary keychain, installs the App Store profile `No Ads Remote App Store CI`, archives with manual signing, and exports with method `app-store-connect`, `signingStyle` manual, and destination `upload`. The build number is `github.run_number`, except workflow run 12 publishes build 11 because run 11 failed before anything was uploaded.
+- `.github/workflows/testflight.yml` runs on pushes to `main` and `workflow_dispatch`. It imports one stored Apple Distribution certificate into a temporary keychain, installs the App Store profile `No Ads Remote App Store CI`, archives with manual signing, and exports with method `app-store-connect`, `signingStyle` manual, and destination `upload`. The build number is `github.run_number`, except workflow run 12 publishes build 11 and run 13 publishes build 12.
 
 TestFlight secrets (repository Actions secrets, never committed):
 
