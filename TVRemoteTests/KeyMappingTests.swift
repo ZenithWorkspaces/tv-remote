@@ -4,7 +4,7 @@ import XCTest
 final class KeyMappingTests: XCTestCase {
     func testEveryRokuKeyExceptInputHasAName() {
         for key in RemoteKey.allCases {
-            if key == .input {
+            if key == .input || key == .skipNext {
                 XCTAssertNil(RokuECP.keyName(for: key))
             } else {
                 XCTAssertNotNil(RokuECP.keyName(for: key), "Missing Roku key for \(key)")
@@ -19,6 +19,8 @@ final class KeyMappingTests: XCTestCase {
         XCTAssertEqual(RokuECP.keyName(for: .rewind), "Rev")
         XCTAssertEqual(RokuECP.keyName(for: .fastForward), "Fwd")
         XCTAssertEqual(RokuECP.keyName(for: .playPause), "Play")
+        XCTAssertEqual(RokuECP.keyName(for: .skipPrevious), "InstantReplay")
+        XCTAssertNil(RokuECP.keyName(for: .skipNext))
         XCTAssertEqual(RokuECP.keyName(for: .volumeUp), "VolumeUp")
         XCTAssertEqual(RokuECP.keyName(for: .mute), "VolumeMute")
         XCTAssertEqual(RokuECP.keyName(for: .powerOn), "PowerOn")
@@ -33,6 +35,10 @@ final class KeyMappingTests: XCTestCase {
         XCTAssertEqual(LGSSAP.command(for: .up), .pointer("UP"))
         XCTAssertEqual(LGSSAP.command(for: .playPause, playNext: true), .pointer("PLAY"))
         XCTAssertEqual(LGSSAP.command(for: .playPause, playNext: false), .pointer("PAUSE"))
+        XCTAssertEqual(LGSSAP.command(for: .rewind), .pointer("REWIND"))
+        XCTAssertEqual(LGSSAP.command(for: .fastForward), .pointer("FASTFORWARD"))
+        XCTAssertEqual(LGSSAP.command(for: .skipPrevious), .pointer("PREVIOUS"))
+        XCTAssertEqual(LGSSAP.command(for: .skipNext), .pointer("NEXT"))
         XCTAssertEqual(LGSSAP.command(for: .powerOn), .unsupported)
         guard case let .request(uri, _) = LGSSAP.command(for: .volumeUp) else {
             return XCTFail("Volume up should be an SSAP request")

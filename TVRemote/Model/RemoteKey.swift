@@ -19,6 +19,8 @@ enum RemoteKey: String, CaseIterable, Equatable {
     case playPause
     case rewind
     case fastForward
+    case skipPrevious
+    case skipNext
     case menu
     case backspace
     case enter

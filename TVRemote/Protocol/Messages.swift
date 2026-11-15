@@ -96,6 +96,8 @@ enum RokuECP {
         case .playPause: return "Play"
         case .rewind: return "Rev"
         case .fastForward: return "Fwd"
+        case .skipPrevious: return "InstantReplay"
+        case .skipNext: return nil
         case .menu: return "Info"
         case .backspace: return "Backspace"
         case .enter: return "Enter"
@@ -235,6 +237,10 @@ enum LGSSAP {
             return .pointer("REWIND")
         case .fastForward:
             return .pointer("FASTFORWARD")
+        case .skipPrevious:
+            return .pointer("PREVIOUS")
+        case .skipNext:
+            return .pointer("NEXT")
         case .menu:
             return .pointer("MENU")
         case .backspace:
@@ -437,6 +443,7 @@ enum SamsungRemote {
         case .playPause: return "KEY_PLAY"
         case .rewind: return "KEY_REWIND"
         case .fastForward: return "KEY_FF"
+        case .skipPrevious, .skipNext: return nil
         case .menu: return "KEY_MENU"
         case .backspace: return nil
         }
@@ -522,6 +529,7 @@ enum SonyIRCC {
         case .playPause: return "AAAAAgAAAJcAAAAaAw=="
         case .rewind: return "AAAAAgAAAJcAAAAbAw=="
         case .fastForward: return "AAAAAgAAAJcAAAAcAw=="
+        case .skipPrevious, .skipNext: return nil
         case .menu: return "AAAAAgAAABoAAABhAw=="
         case .backspace: return nil
         }
@@ -567,6 +575,7 @@ enum VizioSmartCast {
         case .playPause: return playNext ? (2, 3) : (2, 2)
         case .rewind: return (2, 1)
         case .fastForward: return (2, 0)
+        case .skipPrevious, .skipNext: return nil
         case .menu: return (4, 8)
         case .backspace: return nil
         }
