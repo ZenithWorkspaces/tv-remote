@@ -222,7 +222,7 @@ struct AppShortcut: Identifiable, Equatable {
         ),
         AppShortcut(
             slug: "apple-tv",
-            title: "Apple TV",
+            title: "Apple TV+",
             matchNames: ["apple tv"],
             excludeNames: [],
             rokuFallbacks: ["551012"],

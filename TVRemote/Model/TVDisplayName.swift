@@ -61,7 +61,10 @@ struct ShortcutLayout: Codable, Equatable {
     var hidden: [String]
 
     static var standard: ShortcutLayout {
-        ShortcutLayout(order: AppShortcut.all.map(\.slug), hidden: [])
+        ShortcutLayout(
+            order: ["netflix", "prime", "disney", "youtube", "hulu", "peacock", "paramount", "apple-tv", "spotify", "youtube-tv", "max"],
+            hidden: ["youtube-tv", "max"]
+        )
     }
 
     func visibleShortcuts() -> [AppShortcut] {
