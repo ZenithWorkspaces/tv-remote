@@ -9,7 +9,7 @@ enum AndroidTVRemote {
     static let clientName = "No Ads Remote"
     static let serviceName = "atvremote"
 
-    enum Feature: Int {
+    enum Feature {
         static let ping = 1 << 0
         static let key = 1 << 1
         static let ime = 1 << 2
