@@ -204,6 +204,104 @@ jobs:
                   raise SystemExit(f"Could not register a CI device ({error.code}): {detail}")
           PY
 
+      - name: Free a certificate slot
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import base64, json, os, subprocess, time, urllib.error, urllib.request
+
+          def b64url(raw: bytes) -> str:
+              return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+          def der_to_raw(der: bytes) -> bytes:
+              if der[0] != 0x30:
+                  raise SystemExit("Could not sign the App Store Connect token.")
+              index = 2
+              if der[1] & 0x80:
+                  index = 2 + (der[1] & 0x7F)
+              if der[index] != 0x02:
+                  raise SystemExit("Could not sign the App Store Connect token.")
+              index += 1
+              rlen = der[index]
+              index += 1
+              r = der[index:index + rlen]
+              index += rlen
+              if der[index] != 0x02:
+                  raise SystemExit("Could not sign the App Store Connect token.")
+              index += 1
+              slen = der[index]
+              index += 1
+              s = der[index:index + slen]
+              return r[-32:].rjust(32, b"\x00") + s[-32:].rjust(32, b"\x00")
+
+          header = b64url(json.dumps({"alg": "ES256", "kid": os.environ["ASC_KEY_ID"], "typ": "JWT"}, separators=(",", ":")).encode())
+          now = int(time.time())
+          payload = b64url(json.dumps({
+              "iss": os.environ["ASC_ISSUER_ID"],
+              "iat": now,
+              "exp": now + 600,
+              "aud": "appstoreconnect-v1",
+          }, separators=(",", ":")).encode())
+          signing_input = f"{header}.{payload}".encode()
+          der = subprocess.check_output(
+              ["openssl", "dgst", "-sha256", "-sign", os.environ["ASC_KEY_PATH"]],
+              input=signing_input,
+          )
+          token = f"{header}.{payload}.{b64url(der_to_raw(der))}"
+
+          def request(method, url):
+              call = urllib.request.Request(
+                  url,
+                  method=method,
+                  headers={"Authorization": f"Bearer {token}"},
+              )
+              try:
+                  with urllib.request.urlopen(call) as response:
+                      body = response.read().decode("utf-8")
+                      return response.status, json.loads(body) if body else {}
+              except urllib.error.HTTPError as error:
+                  detail = error.read().decode("utf-8", "replace")[:400]
+                  raise SystemExit(f"App Store Connect {method} {url} failed ({error.code}): {detail}")
+
+          status, payload = request("GET", "https://api.appstoreconnect.apple.com/v1/certificates?limit=200")
+          certs = payload.get("data", [])
+          limits = {
+              "DISTRIBUTION": 3,
+              "IOS_DISTRIBUTION": 2,
+              "DEVELOPMENT": 2,
+              "IOS_DEVELOPMENT": 2,
+          }
+          grouped = {kind: [] for kind in limits}
+          for cert in certs:
+              attrs = cert.get("attributes") or {}
+              kind = attrs.get("certificateType") or ""
+              if kind not in grouped:
+                  continue
+              grouped[kind].append({
+                  "id": cert.get("id"),
+                  "name": attrs.get("displayName") or attrs.get("name") or kind,
+                  "expiration": attrs.get("expirationDate") or "",
+              })
+          for kind, items in grouped.items():
+              print(f"{kind}: {len(items)}")
+          revoked = False
+          for kind, limit in limits.items():
+              items = grouped[kind]
+              if len(items) < limit:
+                  continue
+              oldest = sorted(items, key=lambda item: item["expiration"])[0]
+              print(f"Revoking oldest {kind} certificate {oldest['name']} expiring {oldest['expiration']}.")
+              request("DELETE", f"https://api.appstoreconnect.apple.com/v1/certificates/{oldest['id']}")
+              revoked = True
+              break
+          if not revoked:
+              print("Certificate counts are under the signing limits.")
+          PY
+
       - name: Archive
         if: steps.gate.outputs.skip != 'true'
         env:
