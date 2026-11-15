@@ -49,21 +49,18 @@ enum TVBrand: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Shipped controls. Planned brands are discovered and saved, but buttons stay off.
+    /// Sony stays undiscovered. The other brands have a local control path.
+    var isOffered: Bool {
+        self != .sony
+    }
+
     var support: SupportLevel {
-        switch self {
-        case .roku, .lg:
-            return .supported
-        case .samsung, .sony, .vizio:
-            return .beta
-        case .androidtv, .firetv:
-            return .planned
-        }
+        isOffered ? .supported : .planned
     }
 
     var supportsKeyboard: Bool {
         switch self {
-        case .roku, .lg, .samsung: return true
+        case .roku, .lg, .samsung, .androidtv, .firetv: return true
         default: return false
         }
     }

@@ -135,7 +135,7 @@ final class RemoteSession {
         guard !didStart else { return }
         didStart = true
         let snapshot = store.load()
-        devices = snapshot.devices.filter { $0.brand == .roku || $0.brand == .lg }
+        devices = snapshot.devices.filter(\.brand.isOffered)
         friendlyNames = store.loadNames()
         shortcutLayout = store.loadShortcuts()
         refreshResolvedNames()
@@ -312,6 +312,10 @@ final class RemoteSession {
         secrets.set(nil, for: SecretAccount.samsungToken(device.id))
         secrets.set(nil, for: SecretAccount.sonyPSK(device.id))
         secrets.set(nil, for: SecretAccount.vizioAuth(device.id))
+        secrets.set(nil, for: SecretAccount.androidCert(device.id))
+        secrets.set(nil, for: SecretAccount.androidPaired(device.id))
+        PersistentRSAKey.delete(tag: "android.key.\(device.id)")
+        PersistentRSAKey.delete(tag: "adb.key.\(device.id)")
         devices.removeAll { $0.id == device.id }
         friendlyNames[device.id] = nil
         refreshResolvedNames()
@@ -334,8 +338,8 @@ final class RemoteSession {
         }
         let chosen = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if let brand {
-            guard brand == .roku || brand == .lg else {
-                return "This app controls LG and Roku TVs."
+            guard brand.isOffered else {
+                return "This app doesn't control that TV."
             }
             let device = TVDevice.make(
                 name: chosen.isEmpty ? TVDisplayName.suggestion(brand: brand, discovered: nil) : chosen,
@@ -354,9 +358,9 @@ final class RemoteSession {
         linkState = .connecting
         statusText = "Looking for a TV at \(trimmed)…"
         if let found = await PortProbe.identify(host: trimmed, timeout: 0.85, suggestedName: chosen.isEmpty ? nil : chosen) {
-            guard found.brand == .roku || found.brand == .lg else {
+            guard found.brand.isOffered else {
                 linkState = .idle
-                return "This app controls LG and Roku TVs."
+                return "This app doesn't control that TV."
             }
             var device = found
             if !chosen.isEmpty {
@@ -580,7 +584,7 @@ final class RemoteSession {
     }
 
     private func upsert(_ found: TVDevice, selectIfIdle: Bool = true) {
-        guard found.brand == .roku || found.brand == .lg else { return }
+        guard found.brand.isOffered else { return }
         if let index = devices.firstIndex(where: { $0.id == found.id }) {
             var current = devices[index]
             if current.name.isEmpty || current.name == current.brand.displayName {
@@ -621,18 +625,12 @@ final class RemoteSession {
         switch kind {
         case let .acceptOnTV(text): return text
         case let .pin(text): return text
+        case let .code(text): return text
         case let .psk(text): return text
         }
     }
 
     private func plannedCopy(_ brand: TVBrand) -> String {
-        switch brand {
-        case .androidtv:
-            return "Android TV is saved. Remote protocol v2 pairing isn't finished, so the buttons stay off."
-        case .firetv:
-            return "Fire TV is saved. There's no supported local remote API in this build, so the buttons stay off."
-        default:
-            return "Controls for this TV aren't available yet."
-        }
+        "Controls for \(brand.displayName) aren't available in this version."
     }
 }

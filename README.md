@@ -1,6 +1,6 @@
 # No Ads Remote
 
-Ad-free TV remote for iPhone. It stays on your Wi-Fi: no accounts, no analytics, no ads. Portrait controls, a full-width direction pad, and a row of streaming apps you can reorder. The app lists and controls LG webOS and Roku only.
+Ad-free TV remote for iPhone. It stays on your Wi-Fi: no accounts, no analytics, no ads. Portrait controls, a full-width direction pad, and a row of streaming apps you can reorder. It controls LG webOS, Roku, Samsung Tizen, Google TV / Android TV, Vizio SmartCast, and Fire TV. Sony sets are not listed.
 
 Bundle id `com.zenithworkspaces.tvremote`. Display name **No Ads Remote**. Minimum iOS 17. iPhone, portrait, dark.
 
@@ -10,11 +10,11 @@ Bundle id `com.zenithworkspaces.tvremote`. Display name **No Ads Remote**. Minim
 | --- | --- | --- |
 | Roku | Ready | ECP on port 8060. `POST /keypress/…`, `POST /launch/{appId}`, `GET /query/apps`. Channel ids are taken from the TV's installed apps when the name matches, otherwise a known fallback. |
 | LG webOS | Ready | SSAP over `wss://tv:3001` (self-signed cert accepted for that host only). Falls back to `ws://tv:3000`. The TV shows a PIN; the client key is stored in the Keychain. D-pad, OK, back, home, and media keys go out the pointer socket. Volume, mute, channel, input, power off, app launch, and the keyboard use `ssap://`. Power on is Wake-on-LAN after the MAC has been learned. |
-| Samsung Tizen | Not offered | Websocket code remains in the project. The app does not list Samsung sets. |
+| Samsung Tizen | Ready | `wss://tv:8002` (falls back to `ws://tv:8001`). The TV asks you to allow the phone. The token is stored in the Keychain. Keys use `ms.remote.control`. Apps launch with `ed.apps.launch`. Power on is Wake-on-LAN after the MAC is learned. Skip previous and skip next are not on these sets. |
+| Vizio SmartCast | Ready | HTTPS on port 7345, or HTTP on 9000 for older sets. The TV shows a PIN. The auth token is stored in the Keychain. Keys use `/key_command/`. Known apps launch with `/app/launch`; Spotify has no stable id. Skip buttons are not on these sets. |
+| Android / Google TV | Ready | Remote Service v2. Pairing is TLS on port 6467 with a 6-character code. Commands are TLS on port 6466. The phone keeps a certificate in the Keychain. Apps open by link. Power on is Wake-on-LAN, or Wake if the remote session is still up. |
+| Fire TV | Ready, with setup | No local key API works while ADB debugging is off. The app speaks ADB on port 5555. The first connection asks you to allow the phone. App shortcuts start the Fire TV package. |
 | Sony Bravia | Not offered | IRCC code remains in the project. The app does not list Sony sets. |
-| Vizio SmartCast | Not offered | Pairing code remains in the project. The app does not list Vizio sets. |
-| Android / Google TV | Not offered | Discovery hits are ignored. Remote v2 pairing is not finished. |
-| Fire TV | Not offered | Bonjour names such as `amzn.dmgr:…` are ignored. There is no supported local remote API. |
 
 The screen, top to bottom: Power and the centered TV name, then Home / Input / Menu / Keyboard, app logos, then a square plus-shaped pad. Back sits in the pad's top-right corner. Volume, mute, and channel sit in the bottom corners. Skip previous, rewind, play/pause, fast forward, and skip next sit on the bottom row. Holding a direction repeats that key. Roku skip-previous is Instant Replay; Roku has no skip-next key, so that button is for LG. Light haptics. Keypresses are fire-and-forget on a kept-open session.
 
@@ -28,7 +28,11 @@ Put the phone on the same Wi-Fi as the TV.
 
 - **Roku.** Nothing to pair. On the Roku, set *Settings → System → Advanced system settings → Control by mobile apps* to *Enabled* (or *Permissive*). *Limited* will refuse keypresses.
 - **LG.** The TV shows a PIN. Type it in the app. Nothing else has to be pressed on the TV. The client key is saved, so it does not ask again. If that TV cannot do PIN pairing, the app asks you to accept the connection on the TV instead. The small joystick under the TV presses OK. Power-on needs the MAC address, which the app stores the first time a connection succeeds while the TV is on. If Wake-on-LAN doesn't turn the set on, enable *Mobile TV On* / LG Connect Apps on the TV.
-- **Not found.** Same Wi-Fi, TV on, then Scan Wi-Fi or Add by IP. If a socket drops after a good connection, the app retries a few times and then tells you it couldn't reconnect. Samsung, Sony, Vizio, Android TV, and Fire TV are not listed.
+- **Samsung.** Allow the phone on the TV the first time. Power-on needs the MAC, which the app stores after a connection while the TV is on.
+- **Google TV / Android TV.** The TV shows a 6-character code. Type it in. The certificate stays on this phone.
+- **Vizio.** Type the PIN from the TV. Some models reject an app shortcut; the status line says to open that app from the home screen.
+- **Fire TV.** Turn on ADB debugging once: Settings → My Fire TV → About, select the name seven times if Developer options is missing, then Developer options → ADB debugging. Allow this phone when the TV asks.
+- **Not found.** Same Wi-Fi, TV on, then Scan Wi-Fi or Add by IP. If a socket drops after a good connection, the app retries a few times and then tells you it couldn't reconnect. Sony sets are not listed.
 
 ## Discovery without the multicast entitlement
 
@@ -55,7 +59,7 @@ open TVRemote.xcodeproj
 
 Debug is unsigned so CI can build a simulator without certificates. The generated Release configuration names team `938ZF88Q6G`. TestFlight overrides the archive to manual signing and does not ask Xcode to create certificates.
 
-Unit tests cover key mapping and the Roku ECP / LG SSAP message builders (plus Samsung, Sony, Vizio, Wake-on-LAN, and SSDP framing).
+Unit tests cover key mapping and the Roku ECP / LG SSAP message builders, plus Samsung, Sony, Vizio, Android TV Remote v2, Fire TV ADB framing, Wake-on-LAN, and SSDP framing.
 
 ## CI and TestFlight
 
@@ -84,4 +88,4 @@ The App Store Connect app for `com.zenithworkspaces.tvremote` already exists (Ap
 
 1. Merge to `main` when you want the TestFlight workflow to run. A push to `main` archives and uploads. `workflow_dispatch` does the same.
 2. Optional: request the multicast networking entitlement, then add `Config/TVRemote.multicast.entitlements.example` to the app target. Discovery already works without it.
-3. On the TVs, turn on the control settings in the pairing section. Roku and LG are the ones that are meant to be solid.
+3. On the TVs, turn on the control settings in the pairing section. Fire TV needs ADB debugging before the buttons work.

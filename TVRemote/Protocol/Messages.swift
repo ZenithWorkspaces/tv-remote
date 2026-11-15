@@ -443,10 +443,39 @@ enum SamsungRemote {
         case .playPause: return "KEY_PLAY"
         case .rewind: return "KEY_REWIND"
         case .fastForward: return "KEY_FF"
-        case .skipPrevious, .skipNext: return nil
+        case .skipPrevious, .skipNext, .backspace: return nil
         case .menu: return "KEY_MENU"
-        case .backspace: return nil
         }
+    }
+
+    static func unavailableMessage(for key: RemoteKey) -> String {
+        switch key {
+        case .skipPrevious, .skipNext:
+            return "This Samsung doesn't have a skip button."
+        case .backspace:
+            return "Use the keyboard keys on the Samsung screen."
+        default:
+            return "This Samsung doesn't use that button."
+        }
+    }
+
+    static func parseApplications(_ data: Data) -> [InstalledApp] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        var apps: [InstalledApp] = []
+        func walk(_ value: Any) {
+            if let dict = value as? [String: Any] {
+                if let id = dict["appId"] as? String, !id.isEmpty {
+                    let name = (dict["name"] as? String) ?? (dict["app_name"] as? String) ?? id
+                    apps.append(InstalledApp(id: id, name: name))
+                }
+                dict.values.forEach(walk)
+            } else if let array = value as? [Any] {
+                array.forEach(walk)
+            }
+        }
+        walk(json)
+        var seen = Set<String>()
+        return apps.filter { seen.insert($0.id).inserted }
     }
 
     static func clickObject(key: String) -> [String: Any] {
@@ -575,10 +604,35 @@ enum VizioSmartCast {
         case .playPause: return playNext ? (2, 3) : (2, 2)
         case .rewind: return (2, 1)
         case .fastForward: return (2, 0)
-        case .skipPrevious, .skipNext: return nil
+        case .skipPrevious, .skipNext, .backspace: return nil
         case .menu: return (4, 8)
-        case .backspace: return nil
         }
+    }
+
+    static func app(for shortcut: AppShortcut) -> (id: String, nameSpace: Int)? {
+        switch shortcut.slug {
+        case "netflix": return ("1", 3)
+        case "prime": return ("4", 2)
+        case "disney": return ("75", 2)
+        case "youtube": return ("1", 5)
+        case "youtube-tv": return ("3", 5)
+        case "max": return ("128", 2)
+        case "hulu": return ("3", 2)
+        case "peacock": return ("88", 2)
+        case "paramount": return ("37", 2)
+        case "apple-tv": return ("4", 3)
+        default: return nil
+        }
+    }
+
+    static func launchObject(appID: String, nameSpace: Int) -> [String: Any] {
+        [
+            "VALUE": [
+                "APP_ID": appID,
+                "NAME_SPACE": nameSpace,
+                "MESSAGE": NSNull()
+            ]
+        ]
     }
 
     static func commandObject(codeset: Int, code: Int) -> [String: Any] {
@@ -720,7 +774,7 @@ enum SSDPMessage {
 
 enum DiscoveryPorts {
     /// Known TV control ports used when multicast SSDP is unavailable.
-    static let scan: [UInt16] = [8060, 3000, 3001, 8001, 8002, 7345, 9000, 6466, 8008]
+    static let scan: [UInt16] = [8060, 3000, 3001, 8001, 8002, 7345, 9000, 6466, 8008, 5555]
 }
 
 enum BonjourServiceType {

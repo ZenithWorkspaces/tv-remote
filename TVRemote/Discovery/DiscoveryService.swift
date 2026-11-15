@@ -109,7 +109,7 @@ final class DiscoveryService {
     }
 
     private func deliver(_ device: TVDevice) {
-        guard device.brand == .roku || device.brand == .lg else { return }
+        guard device.brand.isOffered else { return }
         DispatchQueue.main.async { [weak self] in
             self?.onFound?(device)
         }
@@ -150,7 +150,6 @@ final class DiscoveryService {
                     if let device = await PortProbe.identify(host: host, timeout: 0.45, suggestedName: instanceName) {
                         self.deliver(device)
                     }
-                    // `_amzn-wplay` often advertises as `amzn.dmgr:<id>`. Those devices are not controllable here.
                 }
             case .failed(_):
                 self.forget(connection)

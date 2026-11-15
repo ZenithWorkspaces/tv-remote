@@ -3,6 +3,7 @@ import Foundation
 enum PairingKind: Equatable {
     case acceptOnTV(String)
     case pin(String)
+    case code(String)
     case psk(String)
 }
 
@@ -47,7 +48,8 @@ enum ControllerFactory {
         case .samsung: return SamsungController()
         case .sony: return SonyController()
         case .vizio: return VizioController()
-        case .androidtv, .firetv: return PlannedController(brand: brand)
+        case .androidtv: return AndroidTVController()
+        case .firetv: return FireTVController()
         }
     }
 }

@@ -14,16 +14,32 @@ enum TVDisplayName {
                 return discovered.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             return "Roku TV"
-        default:
-            return "TV"
+        case .samsung:
+            return personal(discovered, fallback: "Samsung TV")
+        case .androidtv:
+            return personal(discovered, fallback: "Google TV")
+        case .vizio:
+            return personal(discovered, fallback: "Vizio TV")
+        case .firetv:
+            return personal(discovered, fallback: "Fire TV")
+        case .sony:
+            return personal(discovered, fallback: "TV")
         }
+    }
+
+    private static func personal(_ discovered: String?, fallback: String) -> String {
+        if let discovered, isPersonalName(discovered) {
+            return discovered.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return fallback
     }
 
     static func isPersonalName(_ name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || looksTechnical(trimmed) { return false }
         let lower = trimmed.lowercased()
-        if lower == "lg" || lower == "roku" || lower == "tv" { return false }
+        if lower == "lg" || lower == "roku" || lower == "tv" || lower == "samsung" || lower == "vizio" { return false }
+        if lower == "android tv" || lower == "google tv" || lower == "fire tv" { return false }
         if lower.contains("webos") || lower.contains("[lg]") { return false }
         if lower.contains("roku tv") && lower.contains("[") { return false }
         if trimmed.range(of: #"[A-Za-z]{1,4}\d{3,}[A-Za-z0-9]*"#, options: .regularExpression) != nil,

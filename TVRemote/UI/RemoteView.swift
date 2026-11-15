@@ -712,7 +712,7 @@ private struct ManualAddSheet: View {
     @State private var error = ""
     @State private var saving = false
 
-    private let choices = ["Auto", "Roku", "LG webOS"]
+    private let choices = ["Auto", "Roku", "LG webOS", "Samsung", "Android TV", "Vizio", "Fire TV"]
 
     var body: some View {
         NavigationStack {
@@ -856,7 +856,7 @@ private struct PairingSheet: View {
                     if isPIN {
                         TextField(entryTitle, text: $session.pairingDraft)
                             .textFieldStyle(.roundedBorder)
-                            .keyboardType(.numberPad)
+                            .keyboardType(isCode ? .asciiCapable : .numberPad)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     } else {
@@ -898,13 +898,20 @@ private struct PairingSheet: View {
     }
 
     private var isPIN: Bool {
-        if case .pin(_) = request.kind { return true }
+        switch request.kind {
+        case .pin(_), .code(_): return true
+        default: return false
+        }
+    }
+
+    private var isCode: Bool {
+        if case .code(_) = request.kind { return true }
         return false
     }
 
     private var needsEntry: Bool {
         switch request.kind {
-        case .pin(_), .psk(_): return true
+        case .pin(_), .code(_), .psk(_): return true
         case .acceptOnTV(_): return false
         }
     }
@@ -912,6 +919,7 @@ private struct PairingSheet: View {
     private var entryTitle: String {
         switch request.kind {
         case .pin(_): return "PIN"
+        case .code(_): return "Code"
         case .psk(_): return "Pre-shared key"
         case .acceptOnTV(_): return ""
         }
@@ -921,13 +929,14 @@ private struct PairingSheet: View {
         switch request.kind {
         case .acceptOnTV(_): return "Allow the remote on the TV"
         case .pin(_): return "Enter the PIN"
+        case .code(_): return "Enter the code"
         case .psk(_): return "Enter the pre-shared key"
         }
     }
 
     private var detail: String {
         switch request.kind {
-        case let .acceptOnTV(text), let .pin(text), let .psk(text):
+        case let .acceptOnTV(text), let .pin(text), let .code(text), let .psk(text):
             return text
         }
     }

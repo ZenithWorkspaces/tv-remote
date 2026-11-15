@@ -12,6 +12,8 @@ enum SecretAccount {
     static func sonyPSK(_ id: String) -> String { "sony.psk.\(id)" }
     static func vizioAuth(_ id: String) -> String { "vizio.auth.\(id)" }
     static func vizioDevice(_ id: String) -> String { "vizio.device.\(id)" }
+    static func androidCert(_ id: String) -> String { "android.cert.\(id)" }
+    static func androidPaired(_ id: String) -> String { "android.paired.\(id)" }
 }
 
 final class KeychainStore: SecretProviding {

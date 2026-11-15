@@ -161,7 +161,8 @@ enum PortProbe {
         async let open9000 = TCPProbe.isOpen(host: host, port: 9000, timeout: timeout)
         async let open6466 = TCPProbe.isOpen(host: host, port: 6466, timeout: timeout)
         async let open8008 = TCPProbe.isOpen(host: host, port: 8008, timeout: timeout)
-        let ports = await (open8060, open3000, open3001, open8001, open8002, open7345, open9000, open6466, open8008)
+        async let open5555 = TCPProbe.isOpen(host: host, port: ADBProtocol.port, timeout: timeout)
+        let ports = await (open8060, open3000, open3001, open8001, open8002, open7345, open9000, open6466, open8008, open5555)
 
         if ports.0, let url = URL(string: "http://\(host):8060\(RokuECP.deviceInfoPath)"),
            let data = await HTTPProbe.get(url: url, timeout: timeout + 0.4, trustHost: nil),
@@ -205,7 +206,21 @@ enum PortProbe {
                 modelName: model
             )
         }
+
+        if ports.9, looksLikeFire(suggestedName) {
+            return TVDevice.make(
+                name: preferred(suggestedName, nil, fallback: "Fire TV"),
+                host: host,
+                brand: .firetv
+            )
+        }
         return nil
+    }
+
+    private static func looksLikeFire(_ name: String?) -> Bool {
+        guard let name else { return false }
+        let lower = name.lowercased()
+        return lower.contains("fire") || lower.contains("amazon") || lower.contains("amzn") || lower.contains("aft")
     }
 
     private static func preferred(_ suggested: String?, _ discovered: String?, fallback: String) -> String {
