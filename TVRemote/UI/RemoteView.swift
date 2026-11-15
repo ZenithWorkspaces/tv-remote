@@ -26,6 +26,7 @@ extension Color {
 
 struct RemoteView: View {
     @Bindable var session: RemoteSession
+    @State private var editingShortcuts = false
 
     var body: some View {
         ZStack {
@@ -48,6 +49,9 @@ struct RemoteView: View {
         .sheet(item: $session.pairing) { request in
             PairingSheet(session: session, request: request)
         }
+        .sheet(isPresented: $session.showRename, onDismiss: { session.dismissRename() }) {
+            RenameSheet(session: session)
+        }
         .confirmationDialog("Forget this TV?", isPresented: $session.confirmForget, titleVisibility: .visible) {
             Button("Forget", role: .destructive) { session.forgetActive() }
             Button("Cancel", role: .cancel) {}
@@ -58,65 +62,96 @@ struct RemoteView: View {
     }
 
     private var controls: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                header
+        VStack(spacing: 8) {
+            header
+            if session.linkState == .notFound || session.linkState == .lost {
                 statusLine
-                switcher
-                if session.activeDevice?.brand.support == .planned {
-                    plannedCard
-                } else {
-                    shortcuts
-                    padCluster
-                    transport
-                    systemRow
-                }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 18)
+            startingRow
+            menuKeyboardRow
+            shortcuts
+            DirectionPad { session.press($0) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+            volumeChannelRow
         }
-        .scrollIndicators(.hidden)
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.activeDevice?.name ?? "No Ads Remote")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    if let brand = session.activeDevice?.brand {
-                        Text(brand.displayName)
-                        if brand.support == .beta {
-                            Text("Beta")
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.remoteWarning.opacity(0.2), in: Capsule())
-                                .foregroundStyle(Color.remoteWarning)
-                        }
-                    } else {
-                        Text("No TV selected")
-                    }
-                }
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.62))
+        HStack(spacing: 10) {
+            Button {
+                if session.needsReconnect { session.retry() }
+            } label: {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 12, height: 12)
             }
+            .disabled(!session.needsReconnect)
+            .accessibilityLabel(statusAccessibility)
+
+            Group {
+                if session.needsReconnect {
+                    Button(action: session.retry) { nameLabel }
+                } else {
+                    Menu { televisionMenu } label: { nameLabel }
+                }
+            }
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in
+                session.beginRename()
+            })
+
             Spacer(minLength: 8)
             Menu {
+                televisionMenu
                 Button("Scan Wi-Fi") { session.rescan() }
-                Button("Add by IP") { session.showManualAdd = true }
                 if session.activeDevice != nil {
                     Button("Forget this TV", role: .destructive) { session.confirmForget = true }
                 }
             } label: {
                 Image(systemName: "ellipsis.circle.fill")
-                    .font(.system(size: 28))
+                    .font(.system(size: 26))
                     .foregroundStyle(.white.opacity(0.85))
-                    .frame(width: 48, height: 48)
+                    .frame(width: 44, height: 44)
             }
             .accessibilityLabel("More")
+        }
+        .frame(minHeight: 44)
+    }
+
+    private var nameLabel: some View {
+        Text(session.activeDevice.map { session.displayName(for: $0) } ?? "No Ads Remote")
+            .font(.system(size: 22, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var televisionMenu: some View {
+        ForEach(session.devices) { device in
+            Button {
+                session.select(device)
+            } label: {
+                if device.id == session.activeID {
+                    Label(session.displayName(for: device), systemImage: "checkmark")
+                } else {
+                    Text(session.displayName(for: device))
+                }
+            }
+        }
+        if !session.devices.isEmpty { Divider() }
+        Button("Rename") { session.beginRename() }
+        Button("Add TV") { session.showManualAdd = true }
+    }
+
+    private var startingRow: some View {
+        HStack(spacing: 8) {
+            symbolKey("Power", systemImage: "power", tint: .remoteDanger) { session.power() }
+            symbolKey("Home", systemImage: "house.fill", key: .home)
+            symbolKey("Input", systemImage: "rectangle.connected.to.line.below") { session.openInputs() }
+            symbolKey("Back", systemImage: "arrow.uturn.backward", key: .back)
         }
     }
 
@@ -141,6 +176,17 @@ struct RemoteView: View {
         .accessibilityElement(children: .combine)
     }
 
+    private var statusAccessibility: String {
+        if session.needsReconnect { return "Reconnect" }
+        switch session.linkState {
+        case .connected: return "Connected"
+        case .connecting, .reconnecting: return "Connecting"
+        case .pairing: return "Pairing"
+        case .idle: return "No TV"
+        case .notFound, .lost, .unavailable: return "Disconnected"
+        }
+    }
+
     private var statusColor: Color {
         switch session.linkState {
         case .connected: return .remoteOK
@@ -149,160 +195,129 @@ struct RemoteView: View {
         }
     }
 
-    private var switcher: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                ForEach(session.devices) { device in
-                    Button {
-                        session.select(device)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(device.name)
-                                .lineLimit(1)
-                            if device.brand.support == .beta {
-                                Text("Beta")
-                                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                                    .foregroundStyle(Color.remoteWarning)
-                            }
-                        }
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(device.id == session.activeID ? Color.black : Color.white)
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .background(device.id == session.activeID ? Color.white : Color.remoteButton, in: Capsule())
-                    }
-                    .accessibilityLabel("Switch to \(device.name)")
-                    .accessibilityAddTraits(device.id == session.activeID ? .isSelected : [])
-                }
-            }
-            .padding(.vertical, 2)
-        }
-        .scrollIndicators(.hidden)
-    }
-
     private var shortcuts: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                ForEach(AppShortcut.all) { shortcut in
-                    Button {
-                        session.launch(shortcut)
-                    } label: {
-                        Text(shortcut.title)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .frame(minHeight: 48)
-                            .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        VStack(alignment: .leading, spacing: 6) {
+            if editingShortcuts {
+                HStack {
+                    Text("Drag to rearrange")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Spacer()
+                    Button("Done") { editingShortcuts = false }
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                }
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(Array(session.visibleShortcuts.enumerated()), id: \.element.id) { index, shortcut in
+                        shortcutTile(shortcut, index: index)
                     }
-                    .accessibilityLabel("Launch \(shortcut.title)")
                 }
             }
-        }
-        .scrollIndicators(.hidden)
-    }
-
-    private var padCluster: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(spacing: 8) {
-                padKey("VOL +", systemImage: "speaker.plus.fill", key: .volumeUp)
-                padKey("MUTE", systemImage: "speaker.slash.fill", key: .mute)
-                padKey("VOL −", systemImage: "speaker.minus.fill", key: .volumeDown)
-            }
-            .frame(width: 76)
-            Group {
-                if session.swipeMode {
-                    swipePad
-                } else {
-                    dPad
+            .scrollIndicators(.hidden)
+            if editingShortcuts, !session.hiddenShortcuts.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(session.hiddenShortcuts) { shortcut in
+                            Button("Show \(shortcut.title)") {
+                                session.setShortcut(shortcut.slug, hidden: false)
+                            }
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 32)
+                        }
+                    }
                 }
+                .scrollIndicators(.hidden)
             }
-            .frame(maxWidth: .infinity)
-            VStack(spacing: 8) {
-                padKey("CH +", systemImage: "chevron.up", key: .channelUp)
-                padKey("PLAY", systemImage: "playpause.fill", key: .playPause)
-                padKey("CH −", systemImage: "chevron.down", key: .channelDown)
-            }
-            .frame(width: 76)
         }
     }
 
-    private var dPad: some View {
-        VStack(spacing: 8) {
-            arrow(.up, image: "chevron.up")
-            HStack(spacing: 8) {
-                arrow(.left, image: "chevron.left")
-                Button {
-                    session.press(.ok)
-                } label: {
-                    Text("OK")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, minHeight: 72)
-                        .background(Color.remoteAccent.opacity(0.9), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                }
-                .accessibilityLabel("OK")
-                arrow(.right, image: "chevron.right")
+    private func shortcutTile(_ shortcut: AppShortcut, index: Int) -> some View {
+        let style = ShortcutStyle.style(for: shortcut.slug)
+        return VStack(spacing: 4) {
+            Text(style.word)
+                .font(.system(size: style.word.count > 9 ? 12 : 14, weight: .heavy, design: .rounded))
+                .foregroundStyle(style.foreground)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 10)
+                .frame(minWidth: 72, minHeight: 44)
+                .background(style.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .rotationEffect(.degrees(editingShortcuts ? (index.isMultiple(of: 2) ? -2 : 2) : 0))
+                .animation(editingShortcuts ? .easeInOut(duration: 0.14).repeatForever(autoreverses: true) : .default, value: editingShortcuts)
+            if editingShortcuts {
+                Button("Hide") { session.setShortcut(shortcut.slug, hidden: true) }
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.7))
             }
-            arrow(.down, image: "chevron.down")
-            Button(session.swipeMode ? "Buttons" : "Swipe pad") {
-                session.swipeMode.toggle()
-            }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.7))
-            .frame(minHeight: 32)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(shortcut.title)
+        .accessibilityAddTraits(.isButton)
+        .onTapGesture {
+            if !editingShortcuts { session.launch(shortcut) }
+        }
+        .onLongPressGesture(minimumDuration: 0.45) {
+            editingShortcuts = true
+        }
+        .modifier(ShortcutDrag(enabled: editingShortcuts, slug: shortcut.slug) { source in
+            session.moveShortcut(source, before: shortcut.slug)
+        })
     }
 
-    private var swipePad: some View {
-        VStack(spacing: 8) {
-            SwipePad { key in
-                session.press(key)
-            }
-            .frame(height: 196)
-            Button("Buttons") { session.swipeMode = false }
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.7))
-                .frame(minHeight: 32)
-        }
-    }
-
-    private var transport: some View {
+    private var menuKeyboardRow: some View {
         HStack(spacing: 8) {
-            wideKey("Rewind", systemImage: "backward.fill", key: .rewind)
-            wideKey("Forward", systemImage: "forward.fill", key: .fastForward)
+            symbolKey("Menu", systemImage: "gearshape.fill", key: .menu)
+            symbolKey("Keyboard", systemImage: "keyboard") { session.openKeyboard() }
         }
     }
 
-    private var systemRow: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                symbolKey("Power", systemImage: "power", tint: .remoteDanger) { session.power() }
-                symbolKey("Input", systemImage: "rectangle.connected.to.line.below") { session.openInputs() }
-                symbolKey("Home", systemImage: "house.fill", key: .home)
-                symbolKey("Back", systemImage: "arrow.uturn.backward", key: .back)
-            }
-            HStack(spacing: 8) {
-                symbolKey("Menu", systemImage: "gearshape.fill", key: .menu)
-                symbolKey("Keyboard", systemImage: "keyboard") { session.openKeyboard() }
-            }
+    private var volumeChannelRow: some View {
+        HStack(spacing: 8) {
+            rocker(
+                lowerTitle: "Vol −", lowerImage: "speaker.minus.fill", lower: .volumeDown,
+                upperTitle: "Vol +", upperImage: "speaker.plus.fill", upper: .volumeUp
+            )
+            symbolKey("Mute", systemImage: "speaker.slash.fill", key: .mute)
+            symbolKey("Play", systemImage: "playpause.fill", key: .playPause)
+            rocker(
+                lowerTitle: "Ch −", lowerImage: "chevron.down", lower: .channelDown,
+                upperTitle: "Ch +", upperImage: "chevron.up", upper: .channelUp
+            )
         }
     }
 
-    private var plannedCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(session.activeDevice?.brand.displayName ?? "This TV")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-            Text(session.statusText)
-                .font(.system(size: 16, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.8))
-            Text("Roku and LG are ready. Samsung, Sony, and Vizio are beta. Android TV and Fire TV are saved only.")
-                .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.6))
+    private func rocker(
+        lowerTitle: String,
+        lowerImage: String,
+        lower: RemoteKey,
+        upperTitle: String,
+        upperImage: String,
+        upper: RemoteKey
+    ) -> some View {
+        HStack(spacing: 0) {
+            rockerHalf(lowerTitle, systemImage: lowerImage, key: lower)
+            Rectangle()
+                .fill(.white.opacity(0.12))
+                .frame(width: 1, height: 28)
+            rockerHalf(upperTitle, systemImage: upperImage, key: upper)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(Color.remoteRaised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, minHeight: 46)
+        .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func rockerHalf(_ title: String, systemImage: String, key: RemoteKey) -> some View {
+        Button {
+            session.press(key)
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 46)
+        }
+        .accessibilityLabel(title)
     }
 
     private var emptyState: some View {
@@ -325,49 +340,6 @@ struct RemoteView: View {
         .padding(24)
     }
 
-    private func padKey(_ title: String, systemImage: String, key: RemoteKey) -> some View {
-        Button {
-            session.press(key)
-        } label: {
-            VStack(spacing: 2) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 16, weight: .bold))
-                Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, minHeight: 58)
-            .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .accessibilityLabel(title)
-    }
-
-    private func arrow(_ key: RemoteKey, image: String) -> some View {
-        Button {
-            session.press(key)
-        } label: {
-            Image(systemName: image)
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 52)
-                .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .accessibilityLabel(Text(directionName(key)))
-    }
-
-    private func wideKey(_ title: String, systemImage: String, key: RemoteKey) -> some View {
-        Button {
-            session.press(key)
-        } label: {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .background(Color.remoteButton, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .accessibilityLabel(title)
-    }
-
     private func symbolKey(_ title: String, systemImage: String, tint: Color = .remoteButton, key: RemoteKey? = nil, action: (() -> Void)? = nil) -> some View {
         Button {
             if let action {
@@ -383,68 +355,191 @@ struct RemoteView: View {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
             }
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, minHeight: 64)
+            .frame(maxWidth: .infinity, minHeight: 46)
             .background(tint, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .accessibilityLabel(title)
     }
 
-    private func directionName(_ key: RemoteKey) -> String {
-        switch key {
-        case .up: return "Up"
-        case .down: return "Down"
-        case .left: return "Left"
-        case .right: return "Right"
-        default: return "Direction"
+}
+
+private struct DirectionPad: View {
+    var onPress: (RemoteKey) -> Void
+    @State private var held: RemoteKey?
+    @State private var repeatTask: Task<Void, Never>?
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color.remoteButton)
+                Image(systemName: "chevron.up")
+                    .position(x: size.width / 2, y: size.height * 0.14)
+                Image(systemName: "chevron.down")
+                    .position(x: size.width / 2, y: size.height * 0.86)
+                Image(systemName: "chevron.left")
+                    .position(x: size.width * 0.12, y: size.height / 2)
+                Image(systemName: "chevron.right")
+                    .position(x: size.width * 0.88, y: size.height / 2)
+                Circle()
+                    .fill(held == .ok ? Color.remoteAccent.opacity(0.75) : Color.remoteAccent)
+                    .frame(width: okDiameter(size), height: okDiameter(size))
+                    .overlay {
+                        Text("OK")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+            }
+            .font(.system(size: 26, weight: .bold))
+            .foregroundStyle(.white.opacity(0.9))
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let next = key(at: value.location, in: size)
+                        guard next != held else { return }
+                        startHold(next)
+                    }
+                    .onEnded { _ in
+                        stopHold()
+                    }
+            )
+            .accessibilityElement()
+            .accessibilityLabel("Direction pad")
+            .accessibilityAction(named: "Up") { onPress(.up) }
+            .accessibilityAction(named: "Down") { onPress(.down) }
+            .accessibilityAction(named: "Left") { onPress(.left) }
+            .accessibilityAction(named: "Right") { onPress(.right) }
+            .accessibilityAction(named: "OK") { onPress(.ok) }
+            .onDisappear { stopHold() }
+        }
+    }
+
+    private func okDiameter(_ size: CGSize) -> CGFloat {
+        min(size.width, size.height) * 0.42
+    }
+
+    private func key(at point: CGPoint, in size: CGSize) -> RemoteKey {
+        let dx = point.x - size.width / 2
+        let dy = point.y - size.height / 2
+        if hypot(dx, dy) <= okDiameter(size) / 2 {
+            return .ok
+        }
+        if abs(dx) > abs(dy) {
+            return dx >= 0 ? .right : .left
+        }
+        return dy >= 0 ? .down : .up
+    }
+
+    private func startHold(_ key: RemoteKey) {
+        stopHold()
+        held = key
+        onPress(key)
+        guard key != .ok else { return }
+        repeatTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            while !Task.isCancelled {
+                onPress(key)
+                try? await Task.sleep(nanoseconds: 120_000_000)
+            }
+        }
+    }
+
+    private func stopHold() {
+        repeatTask?.cancel()
+        repeatTask = nil
+        held = nil
+    }
+}
+
+private struct ShortcutStyle {
+    var word: String
+    var background: Color
+    var foreground: Color
+
+    static func style(for slug: String) -> ShortcutStyle {
+        switch slug {
+        case "netflix":
+            return ShortcutStyle(word: "Netflix", background: Color(red: 0.08, green: 0.08, blue: 0.08), foreground: Color(red: 0.90, green: 0.04, blue: 0.08))
+        case "prime":
+            return ShortcutStyle(word: "prime", background: Color(red: 0.00, green: 0.66, blue: 0.88), foreground: .white)
+        case "disney":
+            return ShortcutStyle(word: "Disney+", background: Color(red: 0.07, green: 0.16, blue: 0.45), foreground: .white)
+        case "youtube":
+            return ShortcutStyle(word: "YouTube", background: Color(red: 0.90, green: 0.04, blue: 0.05), foreground: .white)
+        case "youtube-tv":
+            return ShortcutStyle(word: "YouTube TV", background: Color(red: 0.45, green: 0.02, blue: 0.04), foreground: .white)
+        case "max":
+            return ShortcutStyle(word: "Max", background: Color(red: 0.00, green: 0.17, blue: 0.91), foreground: .white)
+        case "hulu":
+            return ShortcutStyle(word: "hulu", background: Color(red: 0.11, green: 0.91, blue: 0.51), foreground: .black)
+        case "peacock":
+            return ShortcutStyle(word: "Peacock", background: Color(red: 0.06, green: 0.06, blue: 0.09), foreground: Color(red: 0.86, green: 0.73, blue: 0.36))
+        case "paramount":
+            return ShortcutStyle(word: "Paramount+", background: Color(red: 0.00, green: 0.39, blue: 1.0), foreground: .white)
+        case "apple-tv":
+            return ShortcutStyle(word: "tv", background: .black, foreground: .white)
+        case "spotify":
+            return ShortcutStyle(word: "Spotify", background: Color(red: 0.11, green: 0.73, blue: 0.33), foreground: .black)
+        default:
+            return ShortcutStyle(word: slug, background: .remoteButton, foreground: .white)
         }
     }
 }
 
-private struct SwipePad: View {
-    var onKey: (RemoteKey) -> Void
-    @State private var sent = false
+private struct ShortcutDrag: ViewModifier {
+    var enabled: Bool
+    var slug: String
+    var onMove: (String) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .draggable(slug)
+                .dropDestination(for: String.self) { items, _ in
+                    if let source = items.first {
+                        onMove(source)
+                    }
+                    return true
+                }
+        } else {
+            content
+        }
+    }
+}
+
+private struct RenameSheet: View {
+    @Bindable var session: RemoteSession
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 28, style: .continuous)
-            .fill(Color.remoteRaised)
-            .overlay {
-                VStack(spacing: 6) {
-                    Image(systemName: "hand.draw")
-                        .font(.system(size: 28, weight: .semibold))
-                    Text("Swipe to move")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                    Text("Tap for OK")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-                .foregroundStyle(.white)
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Name this TV")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                TextField("Name", text: $session.renameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.words)
+                Spacer()
             }
-            .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        guard !sent else { return }
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        guard abs(dx) > 28 || abs(dy) > 28 else { return }
-                        sent = true
-                        if abs(dx) > abs(dy) {
-                            onKey(dx > 0 ? .right : .left)
-                        } else {
-                            onKey(dy > 0 ? .down : .up)
-                        }
-                    }
-                    .onEnded { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        if !sent && abs(dx) < 18 && abs(dy) < 18 {
-                            onKey(.ok)
-                        }
-                        sent = false
-                    }
-            )
-            .accessibilityLabel("Swipe pad")
-            .accessibilityHint("Swipe up, down, left, or right. Tap for OK.")
+            .padding(22)
+            .background(Color.remoteBackground.ignoresSafeArea())
+            .navigationTitle("Rename")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { session.dismissRename() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { session.saveRename() }
+                        .disabled(session.renameDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .presentationDetents([.medium])
     }
 }
 
@@ -469,7 +564,7 @@ private struct ManualAddSheet: View {
     @State private var error = ""
     @State private var saving = false
 
-    private let choices = ["Auto"] + TVBrand.allCases.map(\.displayName)
+    private let choices = ["Auto", "Roku", "LG webOS"]
 
     var body: some View {
         NavigationStack {

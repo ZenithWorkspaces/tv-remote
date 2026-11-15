@@ -16,6 +16,8 @@ struct PairingRequest: Identifiable {
 final class DeviceStore {
     private let defaults: UserDefaults
     private let key = "tvremote.library.v1"
+    private let namesKey = "tvremote.names.v1"
+    private let shortcutsKey = "tvremote.shortcuts.v1"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -32,6 +34,32 @@ final class DeviceStore {
     func save(_ snapshot: LibrarySnapshot) {
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         defaults.set(data, forKey: key)
+    }
+
+    func loadNames() -> [String: String] {
+        guard let data = defaults.data(forKey: namesKey),
+              let names = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return names
+    }
+
+    func saveNames(_ names: [String: String]) {
+        guard let data = try? JSONEncoder().encode(names) else { return }
+        defaults.set(data, forKey: namesKey)
+    }
+
+    func loadShortcuts() -> ShortcutLayout {
+        guard let data = defaults.data(forKey: shortcutsKey),
+              let layout = try? JSONDecoder().decode(ShortcutLayout.self, from: data) else {
+            return .standard
+        }
+        return layout
+    }
+
+    func saveShortcuts(_ layout: ShortcutLayout) {
+        guard let data = try? JSONEncoder().encode(layout) else { return }
+        defaults.set(data, forKey: shortcutsKey)
     }
 }
 
@@ -52,7 +80,17 @@ final class RemoteSession {
     var showKeyboard = false
     var showInputs = false
     var confirmForget = false
-    var swipeMode = false
+    var showRename = false
+    var renameDraft = ""
+
+    var needsReconnect: Bool {
+        switch linkState {
+        case .notFound, .lost, .idle, .unavailable:
+            return activeDevice != nil
+        default:
+            return false
+        }
+    }
 
     enum LinkState: Equatable {
         case idle
@@ -68,6 +106,11 @@ final class RemoteSession {
     private let store = DeviceStore()
     private let secrets = KeychainStore()
     private let discovery = DiscoveryService()
+    private var friendlyNames: [String: String] = [:]
+    private var resolvedNames: [String: String] = [:]
+    private var shortcutLayout = ShortcutLayout.standard
+    private var renameID: String?
+    private var renameBaseline = ""
     private var controller: (any TVControlling)?
     private var didStart = false
     private var connectGeneration = 0
@@ -92,8 +135,17 @@ final class RemoteSession {
         guard !didStart else { return }
         didStart = true
         let snapshot = store.load()
-        devices = snapshot.devices
+        devices = snapshot.devices.filter { $0.brand == .roku || $0.brand == .lg }
+        friendlyNames = store.loadNames()
+        shortcutLayout = store.loadShortcuts()
+        refreshResolvedNames()
+        if devices.count != snapshot.devices.count {
+            persist()
+        }
         activeID = snapshot.lastDeviceID ?? devices.first?.id
+        if let activeID, !devices.contains(where: { $0.id == activeID }) {
+            self.activeID = devices.first?.id
+        }
         guard !Runtime.isRunningTests else { return }
         discovery.onFound = { [weak self] device in
             Task { @MainActor in
@@ -223,7 +275,7 @@ final class RemoteSession {
             suppressReconnect = true
             controller?.press(.powerOff)
             linkState = .idle
-            statusText = "Turning off \(device.name)"
+            statusText = "Turning off \(displayName(for: device))"
             return
         }
         suppressReconnect = false
@@ -236,7 +288,7 @@ final class RemoteSession {
             statusText = "Turn the LG on once and connect so Wake-on-LAN can remember its MAC address."
             return
         }
-        statusText = "Power on sent to \(device.name)"
+        statusText = "Power on sent to \(displayName(for: device))"
         let generation = connectGeneration
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -256,6 +308,8 @@ final class RemoteSession {
         secrets.set(nil, for: SecretAccount.sonyPSK(device.id))
         secrets.set(nil, for: SecretAccount.vizioAuth(device.id))
         devices.removeAll { $0.id == device.id }
+        friendlyNames[device.id] = nil
+        refreshResolvedNames()
         activeID = devices.first?.id
         pairing = nil
         inputs = []
@@ -275,11 +329,18 @@ final class RemoteSession {
         }
         let chosen = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if let brand {
+            guard brand == .roku || brand == .lg else {
+                return "This app controls LG and Roku TVs."
+            }
             let device = TVDevice.make(
-                name: chosen.isEmpty ? brand.displayName : chosen,
+                name: chosen.isEmpty ? TVDisplayName.suggestion(brand: brand, discovered: nil) : chosen,
                 host: trimmed,
                 brand: brand
             )
+            if !chosen.isEmpty {
+                friendlyNames[device.id] = chosen
+                store.saveNames(friendlyNames)
+            }
             upsert(device, selectIfIdle: false)
             showManualAdd = false
             select(fresh(device))
@@ -288,9 +349,15 @@ final class RemoteSession {
         linkState = .connecting
         statusText = "Looking for a TV at \(trimmed)…"
         if let found = await PortProbe.identify(host: trimmed, timeout: 0.85, suggestedName: chosen.isEmpty ? nil : chosen) {
+            guard found.brand == .roku || found.brand == .lg else {
+                linkState = .idle
+                return "This app controls LG and Roku TVs."
+            }
             var device = found
             if !chosen.isEmpty {
                 device.name = chosen
+                friendlyNames[device.id] = chosen
+                store.saveNames(friendlyNames)
             }
             upsert(device, selectIfIdle: false)
             showManualAdd = false
@@ -329,7 +396,7 @@ final class RemoteSession {
         }
 
         linkState = .connecting
-        statusText = "Connecting to \(device.name)…"
+        statusText = "Connecting to \(displayName(for: device))…"
         let created = ControllerFactory.make(brand: device.brand)
         controller = created
         created.onEvent = { [weak self] event in
@@ -350,6 +417,7 @@ final class RemoteSession {
             pairingError = nil
             linkState = .connected
             statusText = "Connected"
+            considerRenamePrompt()
         case let .notFound(message):
             pairing = nil
             linkState = .notFound
@@ -385,11 +453,15 @@ final class RemoteSession {
                 }
             }
         case let .learnedName(name):
-            guard !name.isEmpty else { return }
+            guard !name.isEmpty, let id = activeID, friendlyNames[id] == nil else { return }
             updateActive { device in
-                if device.name == device.brand.displayName {
-                    device.name = name
-                }
+                device.name = name
+            }
+            refreshResolvedNames()
+            if showRename, renameID == id, renameDraft == renameBaseline {
+                let updated = displayName(forID: id)
+                renameDraft = updated
+                renameBaseline = updated
             }
         case .apps:
             break
@@ -403,7 +475,7 @@ final class RemoteSession {
         reconnectAttempt += 1
         if reconnectAttempt > 4 {
             linkState = .lost
-            statusText = "Couldn't reconnect to \(device.name). Check that the TV is on and this phone is on the same Wi-Fi."
+            statusText = "Couldn't reconnect to \(displayName(for: device)). Check that the TV is on and this phone is on the same Wi-Fi."
             return
         }
         linkState = .reconnecting
@@ -422,7 +494,88 @@ final class RemoteSession {
         }
     }
 
+    func displayName(for device: TVDevice) -> String {
+        resolvedNames[device.id] ?? TVDisplayName.suggestion(brand: device.brand, discovered: device.name)
+    }
+
+    var visibleShortcuts: [AppShortcut] {
+        shortcutLayout.visibleShortcuts()
+    }
+
+    var hiddenShortcuts: [AppShortcut] {
+        shortcutLayout.hiddenShortcuts()
+    }
+
+    func beginRename(for device: TVDevice? = nil) {
+        guard let device = device ?? activeDevice else { return }
+        renameID = device.id
+        let current = displayName(for: device)
+        renameDraft = current
+        renameBaseline = current
+        showRename = true
+    }
+
+    func saveRename() {
+        guard let id = renameID ?? activeID else { return }
+        let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        friendlyNames[id] = trimmed
+        store.saveNames(friendlyNames)
+        refreshResolvedNames()
+        showRename = false
+    }
+
+    func dismissRename() {
+        if let id = renameID, friendlyNames[id] == nil, let device = devices.first(where: { $0.id == id }) {
+            friendlyNames[id] = displayName(for: device)
+            store.saveNames(friendlyNames)
+            refreshResolvedNames()
+        }
+        showRename = false
+    }
+
+    func moveShortcut(_ slug: String, before target: String) {
+        shortcutLayout = shortcutLayout.moving(slug, before: target)
+        store.saveShortcuts(shortcutLayout)
+    }
+
+    func setShortcut(_ slug: String, hidden: Bool) {
+        shortcutLayout = shortcutLayout.setting(slug, hidden: hidden)
+        store.saveShortcuts(shortcutLayout)
+    }
+
+    private func considerRenamePrompt() {
+        guard let device = activeDevice, friendlyNames[device.id] == nil, !showRename else { return }
+        beginRename(for: device)
+    }
+
+    private func displayName(forID id: String) -> String {
+        guard let device = devices.first(where: { $0.id == id }) else { return "" }
+        return displayName(for: device)
+    }
+
+    private func refreshResolvedNames() {
+        var taken = Set<String>()
+        var result: [String: String] = [:]
+        for device in devices {
+            if let saved = friendlyNames[device.id], !saved.isEmpty {
+                result[device.id] = saved
+                taken.insert(saved)
+            }
+        }
+        for device in devices where result[device.id] == nil {
+            let unique = TVDisplayName.unique(
+                TVDisplayName.suggestion(brand: device.brand, discovered: device.name),
+                taken: taken
+            )
+            result[device.id] = unique
+            taken.insert(unique)
+        }
+        resolvedNames = result
+    }
+
     private func upsert(_ found: TVDevice, selectIfIdle: Bool = true) {
+        guard found.brand == .roku || found.brand == .lg else { return }
         if let index = devices.firstIndex(where: { $0.id == found.id }) {
             var current = devices[index]
             if current.name.isEmpty || current.name == current.brand.displayName {
@@ -441,6 +594,7 @@ final class RemoteSession {
             created.lastSeen = Date()
             devices.append(created)
         }
+        refreshResolvedNames()
         persist()
         if selectIfIdle, activeID == nil, let device = devices.first(where: { $0.id == found.id }) {
             select(device)
@@ -450,6 +604,7 @@ final class RemoteSession {
     private func updateActive(_ change: (inout TVDevice) -> Void) {
         guard let id = activeID, let index = devices.firstIndex(where: { $0.id == id }) else { return }
         change(&devices[index])
+        refreshResolvedNames()
         persist()
     }
 
