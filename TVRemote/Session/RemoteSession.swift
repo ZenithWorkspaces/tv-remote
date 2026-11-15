@@ -17,7 +17,7 @@ final class DeviceStore {
     private let defaults: UserDefaults
     private let key = "tvremote.library.v1"
     private let namesKey = "tvremote.names.v1"
-    private let shortcutsKey = "tvremote.shortcuts.v1"
+    private let shortcutsKey = "tvremote.shortcuts.v2"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

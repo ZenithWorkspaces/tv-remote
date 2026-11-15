@@ -32,7 +32,7 @@ final class TVDisplayNameTests: XCTestCase {
             .setting("hulu", hidden: true)
         XCTAssertEqual(layout.visibleShortcuts().first?.slug, "spotify")
         XCTAssertFalse(layout.visibleShortcuts().contains { $0.slug == "hulu" })
-        XCTAssertEqual(layout.hiddenShortcuts().map(\.slug), ["hulu"])
+        XCTAssertEqual(layout.hiddenShortcuts().map(\.slug), ["youtube-tv", "max", "hulu"])
         let shown = layout.setting("hulu", hidden: false)
         XCTAssertTrue(shown.visibleShortcuts().contains { $0.slug == "hulu" })
     }
