@@ -139,10 +139,12 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          # Workflow run 11 failed before upload, so build 11 is still unused.
-          # The following run publishes that build. Later runs use the run number.
+          # Run 12 published build 11. Run 13 publishes build 12.
+          # Later runs use the workflow run number.
           if [ "${GITHUB_RUN_NUMBER}" = "12" ]; then
             build=11
+          elif [ "${GITHUB_RUN_NUMBER}" = "13" ]; then
+            build=12
           else
             build="${GITHUB_RUN_NUMBER}"
           fi

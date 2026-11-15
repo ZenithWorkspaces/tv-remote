@@ -2,15 +2,22 @@ import SwiftUI
 import UIKit
 
 enum Haptics {
-    private static let impact = UIImpactFeedbackGenerator(style: .light)
+    private static let tapImpact = UIImpactFeedbackGenerator(style: .medium)
+    private static let firmImpact = UIImpactFeedbackGenerator(style: .heavy)
 
     static func prepare() {
-        impact.prepare()
+        tapImpact.prepare()
+        firmImpact.prepare()
     }
 
     static func tap() {
-        impact.impactOccurred(intensity: 0.65)
-        impact.prepare()
+        tapImpact.impactOccurred(intensity: 1.0)
+        prepare()
+    }
+
+    static func firmTap() {
+        firmImpact.impactOccurred(intensity: 1.0)
+        prepare()
     }
 }
 
@@ -157,6 +164,7 @@ struct RemoteView: View {
                 .frame(width: stage.s(26), height: stage.s(26))
                 .background(Color.remoteMore, in: Circle())
         }
+        .simultaneousGesture(TapGesture().onEnded { Haptics.tap() })
         .accessibilityLabel("More")
         .position(x: stage.x(360 + 13), y: stage.y(79) + stage.s(13))
     }
@@ -165,6 +173,7 @@ struct RemoteView: View {
     private var televisionMenu: some View {
         ForEach(session.devices) { device in
             Button {
+                Haptics.tap()
                 session.select(device)
             } label: {
                 if device.id == session.activeID {

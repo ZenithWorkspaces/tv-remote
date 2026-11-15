@@ -194,7 +194,11 @@ final class RemoteSession {
             statusText = plannedCopy(device.brand)
             return
         }
-        Haptics.tap()
+        if key == .ok {
+            Haptics.firmTap()
+        } else {
+            Haptics.tap()
+        }
         controller?.press(key)
     }
 
@@ -232,6 +236,7 @@ final class RemoteSession {
             statusText = "Keyboard entry isn't available on \(device.brand.displayName)."
             return
         }
+        Haptics.tap()
         showKeyboard = true
     }
 
@@ -270,7 +275,7 @@ final class RemoteSession {
             statusText = plannedCopy(device.brand)
             return
         }
-        Haptics.tap()
+        Haptics.firmTap()
         if linkState == .connected {
             suppressReconnect = true
             controller?.press(.powerOff)
