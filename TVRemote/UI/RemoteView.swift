@@ -86,7 +86,7 @@ struct RemoteView: View {
                 }
                 controlRow(stage)
                 shortcutRow(stage)
-                PlusPad(side: stage.s(370), arm: stage.s(148), okDiameter: stage.s(124), cornerRadius: stage.s(16)) {
+                PlusPad(side: stage.s(370), arm: stage.s(148), okSize: stage.s(116), okCorner: stage.s(24), cornerRadius: stage.s(16)) {
                     session.press($0)
                 }
                 .frame(width: stage.s(370), height: stage.s(370))
@@ -471,7 +471,8 @@ private struct Stage {
 private struct PlusPad: View {
     var side: CGFloat
     var arm: CGFloat
-    var okDiameter: CGFloat
+    var okSize: CGFloat
+    var okCorner: CGFloat
     var cornerRadius: CGFloat
     var onPress: (RemoteKey) -> Void
     @State private var held: RemoteKey?
@@ -488,9 +489,9 @@ private struct PlusPad: View {
                 .fill(Color.remoteButton)
                 .frame(width: side, height: arm)
                 .position(center)
-            Circle()
+            RoundedRectangle(cornerRadius: okCorner, style: .continuous)
                 .fill(held == .ok ? Color.remoteAccent.opacity(0.82) : Color.remoteAccent)
-                .frame(width: okDiameter, height: okDiameter)
+                .frame(width: okSize, height: okSize)
                 .position(center)
             Text("OK")
                 .font(.system(size: side * 32 / 370, weight: .bold))
@@ -543,7 +544,10 @@ private struct PlusPad: View {
         let inVertical = abs(dx) <= arm / 2 && abs(dy) <= side / 2
         let inHorizontal = abs(dy) <= arm / 2 && abs(dx) <= side / 2
         guard inVertical || inHorizontal else { return nil }
-        if hypot(dx, dy) <= okDiameter / 2 { return .ok }
+        let inOK = abs(dx) <= okSize / 2 && abs(dy) <= okSize / 2
+        // The previous OK target was a 124pt circle, not the 148pt arm crossing.
+        let inPreviousCircle = hypot(dx, dy) <= side * 62 / 370
+        if inOK || inPreviousCircle { return .ok }
         if abs(dx) > abs(dy) { return dx < 0 ? .left : .right }
         return dy < 0 ? .up : .down
     }
