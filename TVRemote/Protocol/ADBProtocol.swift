@@ -189,7 +189,8 @@ enum ADBProtocol {
     }
 
     static func montgomeryRR(modulus: Data, wordCount: Int) -> Data? {
-        guard let value = BigUInt(bigEndian: modulus), !value.isZero else { return nil }
+        let value = BigUInt(bigEndian: modulus)
+        guard !value.isZero else { return nil }
         let exponent = 2 * 32 * wordCount
         let rr = BigUInt.pow2(exponent, modulo: value)
         var bytes = rr.bigEndian(paddedTo: modulus.count)
@@ -284,7 +285,7 @@ struct BigUInt: Equatable {
         if shift < 0 { return value }
         for offset in stride(from: shift, through: 0, by: -1) {
             let candidate = modulus.shiftedLeft(offset)
-            if value >= candidate {
+            if value.isAtLeast(candidate) {
                 value = value.subtracting(candidate)
             }
         }
@@ -327,10 +328,10 @@ struct BigUInt: Equatable {
         return BigUInt(words: result)
     }
 
-    private static func >= (lhs: BigUInt, rhs: BigUInt) -> Bool {
-        if lhs.words.count != rhs.words.count { return lhs.words.count > rhs.words.count }
-        for index in stride(from: lhs.words.count - 1, through: 0, by: -1) {
-            if lhs.words[index] != rhs.words[index] { return lhs.words[index] > rhs.words[index] }
+    private func isAtLeast(_ other: BigUInt) -> Bool {
+        if words.count != other.words.count { return words.count > other.words.count }
+        for index in stride(from: words.count - 1, through: 0, by: -1) {
+            if words[index] != other.words[index] { return words[index] > other.words[index] }
         }
         return true
     }
