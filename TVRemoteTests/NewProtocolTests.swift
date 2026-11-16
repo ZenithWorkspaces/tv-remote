@@ -146,6 +146,38 @@ final class NewProtocolTests: XCTestCase {
         XCTAssertNil(SamsungEncrypted.keyName(for: .powerOn))
     }
 
+    func testSamsungDiscoveryRecognizesJSeries() {
+        XCTAssertTrue(SSDPTarget.searchTargets.contains(SSDPTarget.samsungRemote))
+        XCTAssertTrue(SSDPTarget.searchTargets.contains(SSDPTarget.mediaRenderer))
+        XCTAssertTrue(SSDPTarget.searchTargets.contains(SSDPTarget.dial))
+        XCTAssertTrue(SSDPTarget.searchTargets.contains(SSDPTarget.roku))
+        XCTAssertTrue(SSDPTarget.searchTargets.contains(SSDPTarget.lg))
+        XCTAssertEqual(SSDPMessage.brand(searchTarget: SSDPTarget.samsungRemote, server: ""), .samsung)
+        XCTAssertNil(SSDPMessage.brand(searchTarget: SSDPTarget.mediaRenderer, server: "Linux UPnP/1.0"))
+        XCTAssertEqual(SSDPMessage.brand(searchTarget: SSDPTarget.lg, server: ""), .lg)
+        XCTAssertEqual(SSDPMessage.brand(searchTarget: SSDPTarget.roku, server: ""), .roku)
+        let xml = "<root><device><manufacturer>Samsung Electronics</manufacturer><friendlyName>[TV]Samsung LED55</friendlyName></device></root>"
+        XCTAssertEqual(SSDPMessage.brand(descriptionXML: xml), .samsung)
+        for port: UInt16 in [8001, 8080, 8000, 7676, 9197, 55000] {
+            XCTAssertTrue(DiscoveryPorts.scan.contains(port))
+            XCTAssertTrue(DiscoveryPorts.samsung.contains(port))
+        }
+        XCTAssertTrue(BonjourServiceType.all.contains("_dmr._tcp"))
+        XCTAssertTrue(BonjourServiceType.all.contains("_lgsmarttv._tcp"))
+        XCTAssertTrue(BonjourServiceType.all.contains("_roku._tcp"))
+    }
+
+    func testPINSheetWaitsUntilThePageIsOpen() {
+        XCTAssertFalse(SamsungPINPage.isShowing(nil))
+        XCTAssertFalse(SamsungPINPage.isShowing(""))
+        XCTAssertFalse(SamsungPINPage.isShowing("<service><state>stopped</state></service>"))
+        XCTAssertTrue(SamsungPINPage.isShowing("<service><state>running</state></service>"))
+        XCTAssertEqual(SamsungPINPage.state(in: "<state>RUNNING</state>"), "running")
+        XCTAssertTrue(SamsungPINPage.closedMessage.contains("Device Connection Manager"))
+        XCTAssertTrue(SamsungPINPage.closedMessage.contains("Access Notification"))
+        XCTAssertFalse(SamsungPINPage.closedMessage.lowercased().contains("zenith"))
+    }
+
     func testSamsungLegacyPackets() {
         XCTAssertEqual(HexBytes.encode(SamsungLegacy.handshake(description: "iPhone", id: "654321", name: "No Ads Remote")), "0000002c00640008006156426f6232356c08004e6a55304d7a49781400546d38675157527a49464a6c625739305a513d3d")
         XCTAssertEqual(HexBytes.encode(SamsungLegacy.keyPacket("KEY_VOLUP")), "00000011000000000c005330565a58315a5054465651")

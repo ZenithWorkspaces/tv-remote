@@ -697,8 +697,11 @@ enum SSDPTarget {
     static let roku = "roku:ecp"
     static let lg = "urn:lge-com:service:webos-second-screen:1"
     static let dial = "urn:dial-multiscreen-org:service:dial:1"
+    /// 2014–2015 J-series sets answer this and often ignore `ssdp:all`.
+    static let samsungRemote = "urn:samsung.com:device:RemoteControlReceiver:1"
+    static let mediaRenderer = "urn:schemas-upnp-org:device:MediaRenderer:1"
     static let all = "ssdp:all"
-    static let searchTargets = [roku, lg, dial, all]
+    static let searchTargets = [roku, lg, dial, samsungRemote, mediaRenderer, all]
 }
 
 struct SSDPResponse: Equatable {
@@ -774,7 +777,11 @@ enum SSDPMessage {
 
 enum DiscoveryPorts {
     /// Known TV control ports used when multicast SSDP is unavailable.
-    static let scan: [UInt16] = [8060, 3000, 3001, 8001, 8002, 7345, 9000, 6466, 8008, 5555]
+    static let scan: [UInt16] = [
+        8060, 3000, 3001, 8001, 8002, 8000, 8080, 7676, 9197, 55000, 7345, 9000, 6466, 8008, 5555
+    ]
+    /// Open any of these and the host is a Samsung, including 2015 J-series sets that never speak `/api/v2/`.
+    static let samsung: Set<UInt16> = [8001, 8002, 8000, 8080, 7676, 9197, 55000]
 }
 
 enum BonjourServiceType {
@@ -783,6 +790,7 @@ enum BonjourServiceType {
         "_androidtvremote2._tcp",
         "_lgsmarttv._tcp",
         "_samsungmsf._tcp",
+        "_dmr._tcp",
         "_amzn-wplay._tcp",
         "_viziocast._tcp",
         "_roku._tcp"

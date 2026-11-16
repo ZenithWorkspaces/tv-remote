@@ -106,6 +106,25 @@ enum SamsungEncrypted {
     static func pinPageURL(host: String) -> URL? {
         URL(string: "http://\(host):\(pairingPort)/ws/apps/CloudPINPage")
     }
+}
+
+/// CloudPINPage XML. The TV draws the 4-digit PIN only while `state` is no longer `stopped`.
+enum SamsungPINPage {
+    static let closedMessage = "The Samsung didn't open its PIN page. On the TV, open Settings > General > External Device Manager > Device Connection Manager and allow Access Notification and the device list. Then try again."
+
+    static func state(in xml: String?) -> String? {
+        guard let xml else { return nil }
+        return XMLValue.text(xml, tag: "state")?.lowercased()
+    }
+
+    /// `stopped`, a missing body, or an unreadable page means the PIN is not on the TV.
+    static func isShowing(_ xml: String?) -> Bool {
+        guard let state = state(in: xml), !state.isEmpty else { return false }
+        return state != "stopped"
+    }
+}
+
+extension SamsungEncrypted {
 
     static func commandPlaintext(key: String) -> String {
         "{\"method\": \"POST\", \"body\": {\"plugin\": \"RemoteControl\", \"param1\": \"uuid:12345\", \"param2\": \"Click\", \"param3\": \"\(key)\", \"param4\": false, \"api\": \"SendRemoteKey\", \"version\": \"1.000\"}}"

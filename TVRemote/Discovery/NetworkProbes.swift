@@ -151,20 +151,36 @@ enum HTTPProbe {
 }
 
 enum PortProbe {
-    static func identify(host: String, timeout: TimeInterval, suggestedName: String? = nil) async -> TVDevice? {
-        async let open8060 = TCPProbe.isOpen(host: host, port: 8060, timeout: timeout)
-        async let open3000 = TCPProbe.isOpen(host: host, port: 3000, timeout: timeout)
-        async let open3001 = TCPProbe.isOpen(host: host, port: 3001, timeout: timeout)
-        async let open8001 = TCPProbe.isOpen(host: host, port: 8001, timeout: timeout)
-        async let open8002 = TCPProbe.isOpen(host: host, port: 8002, timeout: timeout)
-        async let open7345 = TCPProbe.isOpen(host: host, port: 7345, timeout: timeout)
-        async let open9000 = TCPProbe.isOpen(host: host, port: 9000, timeout: timeout)
-        async let open6466 = TCPProbe.isOpen(host: host, port: 6466, timeout: timeout)
-        async let open8008 = TCPProbe.isOpen(host: host, port: 8008, timeout: timeout)
-        async let open5555 = TCPProbe.isOpen(host: host, port: ADBProtocol.port, timeout: timeout)
-        let ports = await (open8060, open3000, open3001, open8001, open8002, open7345, open9000, open6466, open8008, open5555)
+    struct Inspection: Equatable {
+        var host: String
+        var openPorts: [UInt16]
+        var device: TVDevice?
+    }
 
-        if ports.0, let url = URL(string: "http://\(host):8060\(RokuECP.deviceInfoPath)"),
+    static func identify(host: String, timeout: TimeInterval, suggestedName: String? = nil) async -> TVDevice? {
+        await inspect(host: host, timeout: timeout, suggestedName: suggestedName).device
+    }
+
+    static func inspect(host: String, timeout: TimeInterval, suggestedName: String? = nil) async -> Inspection {
+        var open: [UInt16] = []
+        await withTaskGroup(of: (UInt16, Bool).self) { group in
+            for port in DiscoveryPorts.scan {
+                group.addTask {
+                    let isOpen = await TCPProbe.isOpen(host: host, port: port, timeout: timeout)
+                    return (port, isOpen)
+                }
+            }
+            for await (port, isOpen) in group where isOpen {
+                open.append(port)
+            }
+        }
+        open.sort()
+        let device = await classify(host: host, open: Set(open), timeout: timeout, suggestedName: suggestedName)
+        return Inspection(host: host, openPorts: open, device: device)
+    }
+
+    private static func classify(host: String, open: Set<UInt16>, timeout: TimeInterval, suggestedName: String?) async -> TVDevice? {
+        if open.contains(8060), let url = URL(string: "http://\(host):8060\(RokuECP.deviceInfoPath)"),
            let data = await HTTPProbe.get(url: url, timeout: timeout + 0.4, trustHost: nil),
            let xml = String(data: data, encoding: .utf8),
            xml.lowercased().contains("roku") || xml.contains("<power-mode>") || xml.contains("<model-name>") {
@@ -173,27 +189,23 @@ enum PortProbe {
             return TVDevice.make(name: name, host: host, brand: .roku, macAddress: info.macAddress, modelName: info.model)
         }
 
-        if ports.3 || ports.4, let url = URL(string: "http://\(host):8001/api/v2/"),
-           let data = await HTTPProbe.get(url: url, timeout: timeout + 0.4, trustHost: nil),
-           let text = String(data: data, encoding: .utf8)?.lowercased(),
-           text.contains("samsung") || text.contains("tizen") || text.contains("\"device\"") || text.contains("devicename") {
-            let name = preferred(suggestedName, nil, fallback: "Samsung")
-            return TVDevice.make(name: name, host: host, brand: .samsung)
+        if !open.isDisjoint(with: DiscoveryPorts.samsung) {
+            return TVDevice.make(name: preferred(suggestedName, nil, fallback: "Samsung"), host: host, brand: .samsung)
         }
 
-        if ports.2 {
+        if open.contains(3001) {
             return TVDevice.make(name: preferred(suggestedName, nil, fallback: "LG TV"), host: host, brand: .lg)
         }
 
-        if ports.5 || ports.6 {
+        if open.contains(7345) || open.contains(9000) {
             return TVDevice.make(name: preferred(suggestedName, nil, fallback: "Vizio"), host: host, brand: .vizio)
         }
 
-        if ports.7 {
+        if open.contains(6466) {
             return TVDevice.make(name: preferred(suggestedName, nil, fallback: "Android TV"), host: host, brand: .androidtv)
         }
 
-        if ports.8, let url = URL(string: "http://\(host):8008/ssdp/device-description.xml"),
+        if open.contains(8008), let url = URL(string: "http://\(host):8008/ssdp/device-description.xml"),
            let data = await HTTPProbe.get(url: url, timeout: timeout + 0.4, trustHost: nil),
            let xml = String(data: data, encoding: .utf8),
            let brand = SSDPMessage.brand(descriptionXML: xml) {
@@ -207,7 +219,7 @@ enum PortProbe {
             )
         }
 
-        if ports.9, looksLikeFire(suggestedName) {
+        if open.contains(ADBProtocol.port), looksLikeFire(suggestedName) {
             return TVDevice.make(
                 name: preferred(suggestedName, nil, fallback: "Fire TV"),
                 host: host,

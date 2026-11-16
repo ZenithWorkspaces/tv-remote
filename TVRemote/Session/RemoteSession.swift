@@ -74,6 +74,11 @@ final class RemoteSession {
     private(set) var isScanning = false
     private(set) var discovered: [TVDevice] = []
     private(set) var connectedBanner: String?
+    private(set) var diagnosticLog: [String] = []
+
+    var diagnosticText: String {
+        diagnosticLog.joined(separator: "\n")
+    }
 
     var pairing: PairingRequest?
     var pairingDraft = ""
@@ -164,6 +169,11 @@ final class RemoteSession {
                 self?.isScanning = scanning
             }
         }
+        discovery.onLog = { [weak self] line in
+            Task { @MainActor in
+                self?.logDiagnostic(line)
+            }
+        }
         discovery.start()
         if let device = activeDevice {
             connect(device, resetAttempts: true)
@@ -178,9 +188,23 @@ final class RemoteSession {
         prepareAddScan()
     }
 
+    /// Keeps TVs already found. Clearing here used to wipe a Samsung the background scan had just seen.
     func prepareAddScan() {
+        rescan()
+    }
+
+    func restartAddScan() {
         discovered.removeAll()
         rescan()
+    }
+
+    func logDiagnostic(_ line: String) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        diagnosticLog.append("\(DiagnosticClock.stamp()) \(trimmed)")
+        if diagnosticLog.count > 400 {
+            diagnosticLog.removeFirst(diagnosticLog.count - 400)
+        }
     }
 
     func connectFound(_ found: TVDevice, name: String) {
@@ -531,6 +555,8 @@ final class RemoteSession {
             break
         case let .message(text):
             statusText = text
+        case let .diagnostic(line):
+            logDiagnostic(line)
         }
     }
 
@@ -721,5 +747,18 @@ final class RemoteSession {
 
     private func plannedCopy(_ brand: TVBrand) -> String {
         "Controls for \(brand.displayName) aren't available in this version."
+    }
+}
+
+enum DiagnosticClock {
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    static func stamp() -> String {
+        formatter.string(from: Date())
     }
 }
