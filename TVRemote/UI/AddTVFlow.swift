@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AddTVSheet: View {
     @Bindable var session: RemoteSession
@@ -8,7 +9,7 @@ struct AddTVSheet: View {
     var body: some View {
         NavigationStack {
             Group {
-                if !session.isScanning && session.discovered.isEmpty {
+                if !session.isScanning && listed.isEmpty {
                     emptyScan
                 } else {
                     List {
@@ -20,7 +21,7 @@ struct AddTVSheet: View {
                             }
                             .listRowBackground(Color.clear)
                         }
-                        ForEach(session.discovered) { device in
+                        ForEach(listed) { device in
                             foundRow(device)
                         }
                     }
@@ -43,7 +44,6 @@ struct AddTVSheet: View {
         }
         .preferredColorScheme(.dark)
         .presentationDetents([.large])
-        .onAppear { session.prepareAddScan() }
     }
 
     private var emptyScan: some View {
@@ -58,12 +58,24 @@ struct AddTVSheet: View {
                 .multilineTextAlignment(.center)
             Button("Scan again") {
                 Haptics.lightTap()
-                session.prepareAddScan()
+                session.restartAddScan()
             }
             .buttonStyle(RemoteFillStyle(tint: .remoteAccent))
             Spacer()
         }
         .padding(28)
+    }
+
+    /// Saved TVs stay visible even when this pass hasn't seen that IP yet.
+    private var listed: [TVDevice] {
+        var seen = Set<String>()
+        var rows: [TVDevice] = []
+        for device in session.discovered + session.devices {
+            if seen.insert(device.id).inserted {
+                rows.append(device)
+            }
+        }
+        return rows
     }
 
     private func foundRow(_ device: TVDevice) -> some View {
@@ -219,6 +231,9 @@ struct AdvancedSheet: View {
                 NavigationLink("Add by IP address") {
                     ManualAddSheet(session: session, embedded: true)
                 }
+                NavigationLink("Connection log") {
+                    DiagnosticsView(session: session)
+                }
             }
             .navigationTitle("Advanced")
             .navigationBarTitleDisplayMode(.inline)
@@ -229,6 +244,42 @@ struct AdvancedSheet: View {
             }
         }
         .preferredColorScheme(.dark)
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
+    }
+}
+
+struct DiagnosticsView: View {
+    var session: RemoteSession
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if session.diagnosticLog.isEmpty {
+                Text("No probes yet. Scan for a TV or try connecting, then come back.")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+            } else {
+                ScrollView {
+                    Text(session.diagnosticText)
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 0)
+            Button(copied ? "Copied" : "Copy log") {
+                UIPasteboard.general.string = session.diagnosticText.isEmpty
+                    ? "No probes yet."
+                    : session.diagnosticText
+                copied = true
+            }
+            .buttonStyle(RemoteFillStyle(tint: .remoteAccent))
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.remoteBackground)
+        .navigationTitle("Connection log")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

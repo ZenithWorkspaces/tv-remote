@@ -6,12 +6,19 @@ import Darwin
 final class DiscoveryService {
     var onFound: ((TVDevice) -> Void)?
     var onScanning: ((Bool) -> Void)?
+    var onLog: ((String) -> Void)?
 
     private var browsers: [NWBrowser] = []
     private var multicast: NWConnectionGroup?
+    private var multicastReady = false
     private var scanTask: Task<Void, Never>?
     private var resolvers: [ObjectIdentifier: NWConnection] = [:]
     private let resolverLock = NSLock()
+    private let generationLock = NSLock()
+    private var scanGeneration = 0
+    /// Long enough for a 2015 Samsung to answer SSDP and for the /24 sweep to finish.
+    private let scanWindow: TimeInterval = 12
+    private let unicastListen: TimeInterval = 6
 
     func start() {
         startBonjour()
@@ -35,6 +42,7 @@ final class DiscoveryService {
         browsers.removeAll()
         multicast?.cancel()
         multicast = nil
+        multicastReady = false
         resolverLock.lock()
         resolvers.values.forEach { $0.cancel() }
         resolvers.removeAll()
@@ -42,16 +50,38 @@ final class DiscoveryService {
     }
 
     private func run(forcePorts: Bool) async {
+        let generation = bumpGeneration()
+        let started = Date()
         await MainActor.run { self.onScanning?(true) }
-        defer { Task { @MainActor in self.onScanning?(false) } }
-        guard let localIP = LocalIPv4.address() else { return }
-        let responses = await Task.detached(priority: .userInitiated) {
-            UnicastSSDP.collect(localIP: localIP, listen: 2.4)
-        }.value
-        if Task.isCancelled { return }
-        for response in responses {
-            ingest(response)
+        log("Scan started")
+        sendSearches()
+        defer {
+            let elapsed = Date().timeIntervalSince(started)
+            let remain = scanWindow - elapsed
+            Task { @MainActor in
+                if remain > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remain * 1_000_000_000))
+                }
+                guard self.currentGeneration() == generation else { return }
+                self.log(String(format: "Scan finished after %.0fs", Date().timeIntervalSince(started)))
+                self.onScanning?(false)
+            }
         }
+        guard let localIP = LocalIPv4.address() else {
+            log("Scan stopped: this phone has no Wi-Fi address")
+            return
+        }
+        let listen = unicastListen
+        let responses = await Task.detached(priority: .userInitiated) { [weak self] in
+            UnicastSSDP.collect(localIP: localIP, listen: listen) { response in
+                self?.ingest(response)
+            }
+        }.value
+        if Task.isCancelled || currentGeneration() != generation { return }
+        if responses.isEmpty {
+            log("Unicast SSDP: no replies")
+        }
+        sendSearches()
         let shouldScanPorts = forcePorts || responses.isEmpty
         if shouldScanPorts {
             await portScan(localIP: localIP)
@@ -59,6 +89,7 @@ final class DiscoveryService {
     }
 
     private func portScan(localIP: String) async {
+        log("Port sweep started")
         let hosts = LocalIPv4.subnetHosts(from: localIP)
         var index = 0
         while index < hosts.count {
@@ -66,14 +97,19 @@ final class DiscoveryService {
             let end = min(index + 16, hosts.count)
             let batch = Array(hosts[index..<end])
             index = end
-            await withTaskGroup(of: TVDevice?.self) { group in
+            await withTaskGroup(of: PortProbe.Inspection.self) { group in
                 for host in batch {
                     group.addTask {
-                        await PortProbe.identify(host: host, timeout: 0.28)
+                        await PortProbe.inspect(host: host, timeout: 0.4)
                     }
                 }
-                for await device in group {
-                    if let device {
+                for await inspection in group {
+                    if !inspection.openPorts.isEmpty {
+                        let ports = inspection.openPorts.map(String.init).joined(separator: ",")
+                        let brand = inspection.device?.brand.rawValue ?? "unrecognized"
+                        self.log("\(inspection.host) open \(ports) \(brand)")
+                    }
+                    if let device = inspection.device {
                         self.deliver(device)
                     }
                 }
@@ -81,9 +117,26 @@ final class DiscoveryService {
         }
     }
 
+    private func bumpGeneration() -> Int {
+        generationLock.lock()
+        scanGeneration += 1
+        let value = scanGeneration
+        generationLock.unlock()
+        return value
+    }
+
+    private func currentGeneration() -> Int {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        return scanGeneration
+    }
+
     private func ingest(_ response: SSDPResponse) {
         guard let host = response.host, !host.isEmpty else { return }
-        if let brand = SSDPMessage.brand(searchTarget: response.searchTarget, server: response.server) {
+        let hinted = SSDPMessage.brand(searchTarget: response.searchTarget, server: response.server)
+        let target = response.searchTarget.isEmpty ? "-" : response.searchTarget
+        log("SSDP \(host) ST=\(target) \(hinted?.rawValue ?? "checking description")")
+        if let brand = hinted {
             deliver(TVDevice.make(name: brand.displayName, host: host, brand: brand))
         }
         guard let location = response.location, let url = URL(string: location) else { return }
@@ -92,12 +145,16 @@ final class DiscoveryService {
                   let xml = String(data: data, encoding: .utf8) else { return }
             let brand = SSDPMessage.brand(descriptionXML: xml)
                 ?? SSDPMessage.brand(searchTarget: response.searchTarget, server: response.server)
-            guard let brand else { return }
+            guard let brand else {
+                self?.log("SSDP \(host) description unrecognized")
+                return
+            }
             let friendly = XMLValue.text(xml, tag: "friendlyName")
                 ?? XMLValue.text(xml, tag: "friendly-device-name")
                 ?? XMLValue.text(xml, tag: "user-device-name")
             let model = XMLValue.text(xml, tag: "modelName") ?? XMLValue.text(xml, tag: "model-name")
             let mac = MACAddress.find(in: xml)
+            self?.log("SSDP \(host) description \(brand.rawValue) \(friendly ?? "")")
             self?.deliver(TVDevice.make(
                 name: (friendly?.isEmpty == false ? friendly! : brand.displayName),
                 host: host,
@@ -112,6 +169,13 @@ final class DiscoveryService {
         guard device.brand.isOffered else { return }
         DispatchQueue.main.async { [weak self] in
             self?.onFound?(device)
+        }
+    }
+
+    private func log(_ line: String) {
+        let callback = onLog
+        DispatchQueue.main.async {
+            callback?(line)
         }
     }
 
@@ -148,7 +212,14 @@ final class DiscoveryService {
                 Task { [weak self] in
                     guard let self else { return }
                     if let device = await PortProbe.identify(host: host, timeout: 0.45, suggestedName: instanceName) {
+                        self.log("Bonjour \(serviceType) \(instanceName) \(host) \(device.brand.rawValue)")
                         self.deliver(device)
+                    } else if Self.samsungHint(serviceType: serviceType, name: instanceName) {
+                        self.log("Bonjour \(serviceType) \(instanceName) \(host) samsung")
+                        let name = instanceName.isEmpty ? "Samsung" : instanceName
+                        self.deliver(TVDevice.make(name: name, host: host, brand: .samsung))
+                    } else {
+                        self.log("Bonjour \(serviceType) \(instanceName) \(host) no brand")
                     }
                 }
             case .failed(_):
@@ -179,10 +250,11 @@ final class DiscoveryService {
                 guard let self else { return }
                 switch state {
                 case .ready:
-                    for target in SSDPTarget.searchTargets {
-                        let payload = Data(SSDPMessage.search(target: target).utf8)
-                        connection.send(content: payload) { _ in }
-                    }
+                    self.multicastReady = true
+                    self.sendSearches()
+                case .failed(let error):
+                    self.multicastReady = false
+                    self.log("SSDP multicast unavailable (\(error.localizedDescription))")
                 default:
                     break
                 }
@@ -191,7 +263,22 @@ final class DiscoveryService {
             multicast = connection
         } catch {
             multicast = nil
+            log("SSDP multicast unavailable")
         }
+    }
+
+    private func sendSearches() {
+        guard let connection = multicast, multicastReady else { return }
+        for target in SSDPTarget.searchTargets {
+            let payload = Data(SSDPMessage.search(target: target).utf8)
+            connection.send(content: payload) { _ in }
+        }
+        log("SSDP multicast search sent")
+    }
+
+    private static func samsungHint(serviceType: String, name: String) -> Bool {
+        let blob = (serviceType + " " + name).lowercased()
+        return blob.contains("samsung") || blob.contains("[tv]")
     }
 
     private func remember(_ connection: NWConnection) {
@@ -220,13 +307,15 @@ final class DiscoveryService {
 }
 
 enum UnicastSSDP {
-    static func collect(localIP: String, listen: TimeInterval) -> [SSDPResponse] {
+    static func collect(localIP: String, listen: TimeInterval, onEach: ((SSDPResponse) -> Void)? = nil) -> [SSDPResponse] {
         let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         guard fd >= 0 else { return [] }
         defer { close(fd) }
         if !bind(fd, address: localIP) {
             _ = bind(fd, address: "0.0.0.0")
         }
+        var bufferSize: Int32 = 1_048_576
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufferSize, socklen_t(MemoryLayout<Int32>.size))
         var timeout = timeval(tv_sec: 0, tv_usec: 200_000)
         _ = withUnsafePointer(to: &timeout) { pointer in
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, pointer, socklen_t(MemoryLayout<timeval>.stride))
@@ -250,6 +339,7 @@ enum UnicastSSDP {
             if let text = String(bytes: buffer.prefix(count), encoding: .utf8),
                let response = SSDPMessage.parse(text) {
                 found.append(response)
+                onEach?(response)
             }
         }
         return found

@@ -18,6 +18,7 @@ enum ControllerEvent {
     case learnedMAC(String)
     case learnedName(String)
     case message(String)
+    case diagnostic(String)
 }
 
 protocol TVControlling: AnyObject {

@@ -128,7 +128,9 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
     private func open() async {
         let started = Date()
         func expired() -> Bool { stopped || Date().timeIntervalSince(started) > 15 }
-        if await httpResponds("http://\(host):8001/api/v2/") {
+        note("\(host) connect started")
+        await logPorts()
+        if await modernAPI() {
             path = .modern
             let stored = secrets?.string(for: SecretAccount.samsungToken(deviceID))
             if await attempt(secure: true, token: stored) { return }
@@ -139,17 +141,20 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
         }
         if stopped || connected || pairingStarted { return }
         if expired() { fail(); return }
-        let pinPage = await httpResponds("http://\(host):8080/ws/apps/CloudPINPage")
-        let pairingPage = await httpResponds("http://\(host):8080/ws/pairing?step=0&app_id=\(SamsungEncrypted.appID)&device_id=\(SamsungEncrypted.deviceID)&type=1")
-        let portOpen = await TCPProbe.isOpen(host: host, port: UInt16(SamsungEncrypted.pairingPort), timeout: 2)
-        if pinPage || pairingPage || portOpen {
+        let port8080 = await TCPProbe.isOpen(host: host, port: UInt16(SamsungEncrypted.pairingPort), timeout: 1.5)
+        note("\(host) encrypted port 8080 \(port8080 ? "open" : "closed")")
+        if port8080 {
             path = .encrypted
-            await openEncrypted()
+            if await openEncrypted() { return }
+            if stopped || connected || pairingStarted { return }
+            note("\(host) PIN page did not open")
+            emit(.notFound(SamsungPINPage.closedMessage))
             return
         }
-        if stopped || expired() { fail(); return }
-        if await TCPProbe.isOpen(host: host, port: SamsungLegacy.port, timeout: 2) {
+        if stopped { return }
+        if await TCPProbe.isOpen(host: host, port: SamsungLegacy.port, timeout: 1.5) {
             path = .legacy
+            note("\(host) legacy port 55000 open")
             await openLegacy()
             return
         }
@@ -270,61 +275,108 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
         }
     }
 
-    private func openEncrypted() async {
+    /// Shows the PIN sheet only after CloudPINPage leaves `stopped`. Returns false when the TV never opened that page.
+    private func openEncrypted() async -> Bool {
         if let saved = secrets?.string(for: SecretAccount.samsungEncrypted(deviceID)),
-           let parsed = Self.parseEncryptedToken(saved),
-           await connectSocket(context: parsed.context, sessionID: parsed.session) {
-            return
+           let parsed = Self.parseEncryptedToken(saved) {
+            note("\(host) trying saved encrypted session")
+            if await connectSocket(context: parsed.context, sessionID: parsed.session) {
+                return true
+            }
         }
         secrets?.set(nil, for: SecretAccount.samsungEncrypted(deviceID))
-        _ = await post(SamsungEncrypted.pinPageURL(host: host), body: Data("pin4".utf8), json: nil)
+        guard await showPINPage() else { return false }
         pairingStarted = true
         emit(.pairingRequired(.pin("Enter the 4-digit PIN shown on your Samsung TV.")))
         let pin = await nextPIN()
         guard !stopped, pin.count == 4, pin.allSatisfy(\.isNumber) else {
             if !stopped { emit(.pairingRejected("Enter the 4-digit PIN shown on the Samsung TV.")) }
-            return
+            return true
         }
         guard let hello = SamsungEncrypted.serverHello(pin: pin),
               let step0 = SamsungEncrypted.stepURL(host: host, step: 0, type: 1),
               let step1 = SamsungEncrypted.stepURL(host: host, step: 1),
               let step2 = SamsungEncrypted.stepURL(host: host, step: 2) else {
-            fail(); return
+            fail(); return true
         }
-        _ = await get(step0)
+        let step0Result = await exchange(step0, method: "GET")
+        note(statusLine("GET pairing step=0", step0Result, includeBody: false))
         let helloBody = "{\"auth_Data\":{\"auth_type\":\"SPC\",\"GeneratorServerHello\":\"\(HexBytes.encode(hello.serverHello).uppercased())\"}}"
-        guard let step1Data = await post(step1, body: Data(helloBody.utf8), json: true),
+        let step1Result = await exchange(step1, method: "POST", body: Data(helloBody.utf8), contentType: "application/json")
+        note(statusLine("POST pairing step=1", step1Result, includeBody: false))
+        guard let step1Data = step1Result.body,
               let clientHello = Self.jsonString(step1Data, keys: ["auth_data", "GeneratorClientHello"]) ?? Self.nestedClientHello(step1Data),
               let session = SamsungEncrypted.parseClientHello(clientHello, hash: hello.hash, aesKey: hello.aesKey) else {
             emit(.pairingRejected("That PIN didn't work. Check the TV and try again."))
-            return
+            return true
         }
         let requestID = Self.jsonString(step1Data, keys: ["auth_data", "request_id"]) ?? "0"
         let ack = SamsungEncrypted.serverAcknowledge(skPrime: session.skPrime)
         let ackBody = "{\"auth_Data\":{\"auth_type\":\"SPC\",\"request_id\":\"\(requestID)\",\"ServerAckMsg\":\"\(ack)\"}}"
-        guard let step2Data = await post(step2, body: Data(ackBody.utf8), json: true),
+        let step2Result = await exchange(step2, method: "POST", body: Data(ackBody.utf8), contentType: "application/json")
+        note(statusLine("POST pairing step=2", step2Result, includeBody: false))
+        guard let step2Data = step2Result.body,
               let clientAck = Self.nestedClientAck(step2Data),
               SamsungEncrypted.clientAcknowledgeMatches(clientAck, skPrime: session.skPrime),
               let sessionID = Self.nestedSession(step2Data) else {
             emit(.pairingRejected("That PIN didn't work. Check the TV and try again."))
-            return
+            return true
         }
         if let page = SamsungEncrypted.pinPageURL(host: host) {
             var close = page
             close.append(path: "run")
-            _ = await delete(close)
+            let closed = await exchange(close, method: "DELETE")
+            note(statusLine("DELETE CloudPINPage/run", closed, includeBody: false))
         }
         let token = HexBytes.encode(session.context) + ":" + sessionID
         secrets?.set(token, for: SecretAccount.samsungEncrypted(deviceID))
-        if await connectSocket(context: session.context, sessionID: sessionID) { return }
+        if await connectSocket(context: session.context, sessionID: sessionID) { return true }
         if !stopped { fail() }
+        return true
+    }
+
+    /// POST `pin4` the way samsungctl does, then read the page again. The sheet waits for `state` other than `stopped`.
+    private func showPINPage() async -> Bool {
+        guard let page = SamsungEncrypted.pinPageURL(host: host) else { return false }
+        let before = await exchange(page, method: "GET", timeout: 4)
+        note(statusLine("GET CloudPINPage", before, includeBody: true))
+        if SamsungPINPage.isShowing(Self.text(before.body)) {
+            note("\(host) PIN page already open")
+            return true
+        }
+        let posted = await exchange(page, method: "POST", body: Data("pin4".utf8), contentType: "text/plain", timeout: 6)
+        note(statusLine("POST CloudPINPage", posted, includeBody: true))
+        if SamsungPINPage.isShowing(Self.text(posted.body)) {
+            note("\(host) PIN page open")
+            return true
+        }
+        var after = await exchange(page, method: "GET", timeout: 4)
+        note(statusLine("GET CloudPINPage", after, includeBody: true))
+        if !SamsungPINPage.isShowing(Self.text(after.body)) {
+            let retry = await exchange(page, method: "POST", body: Data("pin4".utf8), contentType: nil, timeout: 6)
+            note(statusLine("POST CloudPINPage retry", retry, includeBody: true))
+            if SamsungPINPage.isShowing(Self.text(retry.body)) {
+                note("\(host) PIN page open")
+                return true
+            }
+            after = await exchange(page, method: "GET", timeout: 4)
+            note(statusLine("GET CloudPINPage", after, includeBody: true))
+        }
+        let showing = SamsungPINPage.isShowing(Self.text(after.body))
+        note("\(host) PIN page \(showing ? "open" : "still stopped")")
+        return showing
     }
 
     private func connectSocket(context: Data, sessionID: String) async -> Bool {
-        guard let handshake = await get(URL(string: "http://\(host):8000/socket.io/1/?t=\(Int(Date().timeIntervalSince1970 * 1000))")),
-              let text = String(data: handshake, encoding: .utf8),
+        let handshakeURL = URL(string: "http://\(host):8000/socket.io/1/?t=\(Int(Date().timeIntervalSince1970 * 1000))")
+        let handshake = await exchange(handshakeURL, method: "GET", timeout: 4)
+        note(statusLine("GET socket.io", handshake, includeBody: false))
+        guard let text = Self.text(handshake.body),
               let id = text.split(separator: ":").first,
-              let url = URL(string: "ws://\(host):8000/socket.io/1/websocket/\(id)") else { return false }
+              let url = URL(string: "ws://\(host):8000/socket.io/1/websocket/\(id)") else {
+            note("\(host) socket.io handshake missing a session")
+            return false
+        }
         encryptedContext = context
         encryptedSession = sessionID
         let configuration = URLSessionConfiguration.ephemeral
@@ -363,7 +415,12 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
             }
             connection.start(queue: .global(qos: .userInitiated))
         }
-        guard ready else { fail(); return }
+        guard ready else {
+            note("\(host) legacy connection failed")
+            fail()
+            return
+        }
+        note("\(host) legacy handshake sent, waiting for Allow")
         pairingStarted = true
         emit(.pairingRequired(.acceptOnTV("Allow No Ads Remote on the Samsung screen.")))
         let packet = SamsungLegacy.handshake(description: "iPhone", id: SamsungEncrypted.userID, name: remoteName)
@@ -407,49 +464,84 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
         }
     }
 
-    private func httpResponds(_ string: String) async -> Bool {
-        guard let url = URL(string: string) else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 2.5
-        request.httpMethod = "GET"
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        do {
-            _ = try await session.data(for: request)
-            return true
-        } catch {
-            return false
+    private struct HTTPResult {
+        var status: Int?
+        var body: Data?
+        var error: String?
+    }
+
+    private func logPorts() async {
+        let ports: [UInt16] = [8001, 8002, 8080, 8000, 7676, 9197, 55000]
+        var lines: [String] = []
+        await withTaskGroup(of: String.self) { group in
+            for port in ports {
+                group.addTask { [host] in
+                    let open = await TCPProbe.isOpen(host: host, port: port, timeout: 1.2)
+                    return "\(host) TCP \(port) \(open ? "open" : "closed")"
+                }
+            }
+            for await line in group {
+                lines.append(line)
+            }
+        }
+        for line in lines.sorted() {
+            note(line)
         }
     }
 
-    private func get(_ url: URL?) async -> Data? {
-        guard let url else { return nil }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 4
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        return try? await session.data(for: request).0
+    /// 2016 and newer sets answer `/api/v2/` with a device document. A bare HTTP status is not enough.
+    private func modernAPI() async -> Bool {
+        let result = await exchange(URL(string: "http://\(host):8001/api/v2/"), method: "GET", timeout: 2.5)
+        let text = Self.text(result.body)?.lowercased() ?? ""
+        let match = text.contains("samsung") || text.contains("tizen") || text.contains("\"device\"") || text.contains("devicename")
+        let ok = match && (result.status.map { (200...299).contains($0) } ?? false)
+        note(statusLine("GET :8001/api/v2/", result, includeBody: false) + " match=\(ok)")
+        return ok
     }
 
-    private func post(_ url: URL?, body: Data, json: Bool?) async -> Data? {
-        guard let url else { return nil }
+    private func exchange(
+        _ url: URL?,
+        method: String,
+        body: Data? = nil,
+        contentType: String? = nil,
+        timeout: TimeInterval = 6
+    ) async -> HTTPResult {
+        guard let url else { return HTTPResult(status: nil, body: nil, error: "bad url") }
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 6
+        request.httpMethod = method
+        request.timeoutInterval = timeout
         request.httpBody = body
-        if json == true { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        if let contentType {
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        }
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
-        return try? await session.data(for: request).0
+        do {
+            let (data, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode
+            return HTTPResult(status: status, body: data, error: nil)
+        } catch {
+            return HTTPResult(status: nil, body: nil, error: error.localizedDescription)
+        }
     }
 
-    private func delete(_ url: URL) async -> Bool {
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        request.timeoutInterval = 3
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        return (try? await session.data(for: request)) != nil
+    private func statusLine(_ label: String, _ result: HTTPResult, includeBody: Bool) -> String {
+        let status = result.status.map(String.init) ?? "none"
+        let error = result.error.map { " error=\($0)" } ?? ""
+        guard includeBody, let snippet = Self.text(result.body)?.replacingOccurrences(of: "\n", with: " "), !snippet.isEmpty else {
+            return "\(host) \(label) status=\(status)\(error)"
+        }
+        let clipped = snippet.count > 160 ? String(snippet.prefix(160)) : snippet
+        return "\(host) \(label) status=\(status)\(error) \(clipped)"
+    }
+
+    private func note(_ line: String) {
+        emit(.diagnostic(line))
+    }
+
+    private static func text(_ data: Data?) -> String? {
+        guard let data, !data.isEmpty else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     private static func parseEncryptedToken(_ saved: String) -> (context: Data, session: String)? {

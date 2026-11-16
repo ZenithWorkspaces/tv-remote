@@ -35,6 +35,7 @@
 		<string>_androidtvremote2._tcp</string>
 		<string>_lgsmarttv._tcp</string>
 		<string>_samsungmsf._tcp</string>
+		<string>_dmr._tcp</string>
 		<string>_amzn-wplay._tcp</string>
 		<string>_viziocast._tcp</string>
 		<string>_roku._tcp</string>
