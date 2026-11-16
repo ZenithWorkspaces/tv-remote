@@ -139,7 +139,10 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
         }
         if stopped || connected || pairingStarted { return }
         if expired() { fail(); return }
-        if await httpResponds("http://\(host):8080/ws/apps/CloudPINPage") || await httpResponds("http://\(host):8080/ws/pairing?step=0&app_id=\(SamsungEncrypted.appID)&device_id=\(SamsungEncrypted.deviceID)&type=1") || await TCPProbe.isOpen(host: host, port: UInt16(SamsungEncrypted.pairingPort), timeout: 2) {
+        let pinPage = await httpResponds("http://\(host):8080/ws/apps/CloudPINPage")
+        let pairingPage = await httpResponds("http://\(host):8080/ws/pairing?step=0&app_id=\(SamsungEncrypted.appID)&device_id=\(SamsungEncrypted.deviceID)&type=1")
+        let portOpen = await TCPProbe.isOpen(host: host, port: UInt16(SamsungEncrypted.pairingPort), timeout: 2)
+        if pinPage || pairingPage || portOpen {
             path = .encrypted
             await openEncrypted()
             return

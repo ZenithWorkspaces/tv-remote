@@ -194,6 +194,7 @@ enum AES128 {
     private static func crypt(_ data: Data, key: Data, iv: Data?, encrypt: Bool, ecb: Bool) -> Data? {
         guard key.count == kCCKeySizeAES128, !data.isEmpty, data.count % kCCBlockSizeAES128 == 0 else { return nil }
         var output = Data(count: data.count + kCCBlockSizeAES128)
+        let capacity = output.count
         var written = 0
         var options: CCOptions = 0
         if ecb { options |= CCOptions(kCCOptionECBMode) }
@@ -207,7 +208,7 @@ enum AES128 {
                                 operation, CCAlgorithm(kCCAlgorithmAES), options,
                                 keyBytes.baseAddress, key.count, ivBytes.baseAddress,
                                 input.baseAddress, data.count,
-                                out.baseAddress, output.count, &written
+                                out.baseAddress, capacity, &written
                             )
                         }
                     }
@@ -215,7 +216,7 @@ enum AES128 {
                         operation, CCAlgorithm(kCCAlgorithmAES), options,
                         keyBytes.baseAddress, key.count, nil,
                         input.baseAddress, data.count,
-                        out.baseAddress, output.count, &written
+                        out.baseAddress, capacity, &written
                     )
                 }
             }
