@@ -131,7 +131,15 @@ struct RemoteView: View {
         .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in
             session.beginRename()
         })
-        .position(x: stage.x(201), y: stage.y(92))
+        .position(x: nameLane(stage).center, y: stage.y(92))
+    }
+
+    /// The title sits between Power and the more button, with the same gap on both sides.
+    private func nameLane(_ stage: Stage) -> (center: CGFloat, width: CGFloat) {
+        let gap = stage.s(14)
+        let left = stage.x(16 + 86.5) + gap
+        let right = stage.x(360) - gap
+        return ((left + right) / 2, max(stage.s(80), right - left))
     }
 
     private func nameLabel(_ stage: Stage) -> some View {
@@ -145,9 +153,11 @@ struct RemoteView: View {
                 .tracking(stage.s(-0.4))
                 .foregroundStyle(.white)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.85)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: stage.s(220))
+        .frame(width: nameLane(stage).width)
     }
 
     private func moreButton(_ stage: Stage) -> some View {

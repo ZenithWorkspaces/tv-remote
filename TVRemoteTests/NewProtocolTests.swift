@@ -118,5 +118,31 @@ final class NewProtocolTests: XCTestCase {
         XCTAssertTrue(DiscoveryPorts.scan.contains(6466))
         XCTAssertEqual(TVDisplayName.suggestion(brand: .samsung, discovered: "amzn.dmgr:abc"), "Samsung TV")
         XCTAssertEqual(TVDisplayName.suggestion(brand: .firetv, discovered: "Living Room"), "Living Room")
+        XCTAssertEqual(TVDisplayName.suggestion(brand: .samsung, discovered: "[TV]Samsung LED55"), "Samsung LED55")
+        XCTAssertEqual(TVDisplayName.withoutTVTag("[TV]Samsung LED55"), "Samsung LED55")
+    }
+
+    func testSamsungEncryptedVectors() {
+        XCTAssertEqual(SamsungEncrypted.publicKey.count, 128)
+        let hello = SamsungEncrypted.serverHello(pin: "1234")
+        XCTAssertEqual(HexBytes.encode(hello?.serverHello ?? Data()), "010200000000000000008a00000006363534333231c0dee54ed567f0310a5185dbcdcb0c3e8753b342409786699d343060ab8200afce6bb581e3b60779fe88f1b1bd7c39a0b14898b34f8dfa058e9d377e7050e97d51e18937f04a936b76e00cacbd95b4f5353d8a716b7ab76ec85fc0d3e75cd242e909698ed6f4ba8a3ea5ff33a232400d07cb659f496aa631b5df86253dece96a0000000000")
+        XCTAssertEqual(HexBytes.encode(hello?.aesKey ?? Data()), "7110eda4d09e062aa5e4a390b0a572ac")
+        XCTAssertEqual(AES128.ecb(Data((0..<16).map { UInt8($0) }), key: SamsungEncrypted.wbKey, encrypt: true).map(HexBytes.encode), "de5d917550f71ac31fe1c94a6b025340")
+        let client = "000000000000000000009e000000063635343332316902409ff088c2193a95e83a6e6a254205c1bc2df030724712c06d8631049f5ed1193a17ed19fa31e5f2969b631a3979750ca376fd733d7df70f6ac5540cc0f5251df28041594a268a5c013c6d6b8465bc97daa036b8c9ccd9a812b99fec5cea45b17f84d15585681b6734007a5d75aa18283515e874339f10ff0c56342aaf64e065f3e11b5a488795cb8e67c1471671466b0c400000000000"
+        let session = SamsungEncrypted.parseClientHello(client, hash: hello?.hash ?? Data(), aesKey: hello?.aesKey ?? Data())
+        XCTAssertEqual(HexBytes.encode(session?.context ?? Data()), "05462a5275bcb5c1edbab7c20d61c3ed")
+        XCTAssertEqual(SamsungEncrypted.serverAcknowledge(skPrime: session?.skPrime ?? Data()), "01030000000000000000143F0CF8077AC7900307B6192C63F43CB62D360C420000000000")
+        XCTAssertEqual(SamsungEncrypted.commandPlaintext(key: "KEY_VOLUP"), "{\"method\": \"POST\", \"body\": {\"plugin\": \"RemoteControl\", \"param1\": \"uuid:12345\", \"param2\": \"Click\", \"param3\": \"KEY_VOLUP\", \"param4\": false, \"api\": \"SendRemoteKey\", \"version\": \"1.000\"}}")
+        XCTAssertEqual(SamsungEncrypted.keyName(for: .home), "KEY_CONTENTS")
+        XCTAssertEqual(SamsungEncrypted.keyName(for: .powerOff), "KEY_POWEROFF")
+        XCTAssertEqual(SamsungEncrypted.keyName(for: .back), "KEY_RETURN")
+        XCTAssertNil(SamsungEncrypted.keyName(for: .powerOn))
+    }
+
+    func testSamsungLegacyPackets() {
+        XCTAssertEqual(HexBytes.encode(SamsungLegacy.handshake(description: "iPhone", id: "654321", name: "No Ads Remote")), "0000002c00640008006156426f6232356c08004e6a55304d7a49781400546d38675157527a49464a6c625739305a513d3d")
+        XCTAssertEqual(HexBytes.encode(SamsungLegacy.keyPacket("KEY_VOLUP")), "00000011000000000c005330565a58315a5054465651")
+        let two = BigUInt.modPow(base: BigUInt(bigEndian: Data([2])), exponent: BigUInt(bigEndian: Data([10])), modulus: BigUInt(bigEndian: Data([0x03, 0xE8])))
+        XCTAssertEqual(two.bigEndian(paddedTo: 1), Data([24]))
     }
 }

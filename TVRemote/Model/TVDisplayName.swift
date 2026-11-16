@@ -15,7 +15,7 @@ enum TVDisplayName {
             }
             return "Roku TV"
         case .samsung:
-            return personal(discovered, fallback: "Samsung TV")
+            return personal(withoutTVTag(discovered), fallback: "Samsung TV")
         case .androidtv:
             return personal(discovered, fallback: "Google TV")
         case .vizio:
@@ -25,6 +25,14 @@ enum TVDisplayName {
         case .sony:
             return personal(discovered, fallback: "TV")
         }
+    }
+
+    static func withoutTVTag(_ name: String?) -> String? {
+        guard var text = name?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        if text.lowercased().hasPrefix("[tv]") {
+            text = String(text.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text.isEmpty ? nil : text
     }
 
     private static func personal(_ discovered: String?, fallback: String) -> String {

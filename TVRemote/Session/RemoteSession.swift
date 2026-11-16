@@ -310,6 +310,7 @@ final class RemoteSession {
         controller = nil
         secrets.set(nil, for: SecretAccount.lgClientKey(device.id))
         secrets.set(nil, for: SecretAccount.samsungToken(device.id))
+        secrets.set(nil, for: SecretAccount.samsungEncrypted(device.id))
         secrets.set(nil, for: SecretAccount.sonyPSK(device.id))
         secrets.set(nil, for: SecretAccount.vizioAuth(device.id))
         secrets.set(nil, for: SecretAccount.androidCert(device.id))
@@ -504,7 +505,11 @@ final class RemoteSession {
     }
 
     func displayName(for device: TVDevice) -> String {
-        resolvedNames[device.id] ?? TVDisplayName.suggestion(brand: device.brand, discovered: device.name)
+        let raw = resolvedNames[device.id] ?? TVDisplayName.suggestion(brand: device.brand, discovered: device.name)
+        if device.brand == .samsung, let stripped = TVDisplayName.withoutTVTag(raw), !stripped.isEmpty {
+            return stripped
+        }
+        return raw
     }
 
     var visibleShortcuts: [AppShortcut] {
