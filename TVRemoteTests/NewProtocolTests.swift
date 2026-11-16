@@ -120,6 +120,13 @@ final class NewProtocolTests: XCTestCase {
         XCTAssertEqual(TVDisplayName.suggestion(brand: .firetv, discovered: "Living Room"), "Living Room")
         XCTAssertEqual(TVDisplayName.suggestion(brand: .samsung, discovered: "[TV]Samsung LED55"), "Samsung LED55")
         XCTAssertEqual(TVDisplayName.withoutTVTag("[TV]Samsung LED55"), "Samsung LED55")
+        XCTAssertEqual(AddTVCopy.instruction(brand: .roku, samsungShowsPIN: false), AddTVCopy.roku)
+        XCTAssertEqual(AddTVCopy.instruction(brand: .lg, samsungShowsPIN: false), AddTVCopy.allow)
+        XCTAssertEqual(AddTVCopy.instruction(brand: .samsung, samsungShowsPIN: false), AddTVCopy.allow)
+        XCTAssertEqual(AddTVCopy.instruction(brand: .samsung, samsungShowsPIN: true), AddTVCopy.pin)
+        XCTAssertEqual(AddTVCopy.instruction(brand: .vizio, samsungShowsPIN: false), AddTVCopy.pin)
+        XCTAssertEqual(AddTVCopy.instruction(brand: .androidtv, samsungShowsPIN: false), AddTVCopy.pin)
+        XCTAssertEqual(AddTVCopy.instruction(brand: .firetv, samsungShowsPIN: false), AddTVCopy.allow)
     }
 
     func testSamsungEncryptedVectors() {

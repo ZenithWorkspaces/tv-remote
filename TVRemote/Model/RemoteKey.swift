@@ -37,6 +37,30 @@ enum TVBrand: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var badgeName: String {
+        switch self {
+        case .roku: return "Roku"
+        case .lg: return "LG"
+        case .samsung: return "Samsung"
+        case .androidtv: return "Google"
+        case .firetv: return "Fire"
+        case .sony: return "Sony"
+        case .vizio: return "Vizio"
+        }
+    }
+
+    var badgeColor: (red: Double, green: Double, blue: Double) {
+        switch self {
+        case .samsung: return (0.20, 0.45, 0.95)
+        case .roku: return (0.45, 0.36, 0.95)
+        case .lg: return (0.55, 0.28, 0.75)
+        case .androidtv: return (0.18, 0.62, 0.42)
+        case .vizio: return (0.15, 0.55, 0.72)
+        case .firetv: return (0.85, 0.45, 0.18)
+        case .sony: return (0.35, 0.38, 0.45)
+        }
+    }
+
     var displayName: String {
         switch self {
         case .roku: return "Roku"
@@ -79,7 +103,7 @@ enum SupportLevel: Equatable {
     case planned
 }
 
-struct TVDevice: Codable, Identifiable, Equatable {
+struct TVDevice: Codable, Identifiable, Equatable, Hashable {
     var id: String
     var name: String
     var host: String

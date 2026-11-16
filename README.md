@@ -32,7 +32,7 @@ Put the phone on the same Wi-Fi as the TV.
 - **Google TV / Android TV.** The TV shows a 6-character code. Type it in. The certificate stays on this phone.
 - **Vizio.** Type the PIN from the TV. Some models reject an app shortcut; the status line says to open that app from the home screen.
 - **Fire TV.** Turn on ADB debugging once: Settings → My Fire TV → About, select the name seven times if Developer options is missing, then Developer options → ADB debugging. Allow this phone when the TV asks.
-- **Not found.** Same Wi-Fi, TV on, then Scan Wi-Fi or Add by IP. If a socket drops after a good connection, the app retries a few times and then tells you it couldn't reconnect. Sony sets are not listed.
+- **Not found.** Same Wi-Fi, TV on, then Add TV and scan again. IP entry is under the menu's Advanced item. If a socket drops after a good connection, the app retries a few times and then tells you it couldn't reconnect. Sony sets are not listed.
 
 ## Discovery without the multicast entitlement
 

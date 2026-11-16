@@ -72,11 +72,16 @@ final class RemoteSession {
     private(set) var statusText = "No TV selected"
     private(set) var inputs: [TVInput] = []
     private(set) var isScanning = false
+    private(set) var discovered: [TVDevice] = []
+    private(set) var connectedBanner: String?
 
     var pairing: PairingRequest?
     var pairingDraft = ""
     var pairingError: String?
     var showManualAdd = false
+    var showAddTV = false
+    var showAdvanced = false
+    var addSetupError: String?
     var showKeyboard = false
     var showInputs = false
     var confirmForget = false
@@ -113,6 +118,8 @@ final class RemoteSession {
     private var renameBaseline = ""
     private var controller: (any TVControlling)?
     private var didStart = false
+    private var connectFromAdd = false
+    private var bannerTask: Task<Void, Never>?
     private var connectGeneration = 0
     private var reconnectAttempt = 0
     private var reconnectTask: Task<Void, Never>?
@@ -149,7 +156,7 @@ final class RemoteSession {
         guard !Runtime.isRunningTests else { return }
         discovery.onFound = { [weak self] device in
             Task { @MainActor in
-                self?.upsert(device)
+                self?.noteDiscovered(device)
             }
         }
         discovery.onScanning = { [weak self] scanning in
@@ -161,8 +168,32 @@ final class RemoteSession {
         if let device = activeDevice {
             connect(device, resetAttempts: true)
         } else {
-            statusText = "Looking for TVs on Wi-Fi…"
+            statusText = "No TV selected"
         }
+    }
+
+    func beginAddTV() {
+        addSetupError = nil
+        showAddTV = true
+        prepareAddScan()
+    }
+
+    func prepareAddScan() {
+        discovered.removeAll()
+        rescan()
+    }
+
+    func connectFound(_ found: TVDevice, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let display = trimmed.isEmpty ? TVDisplayName.suggestion(brand: found.brand, discovered: found.name) : trimmed
+        var device = found
+        device.name = display
+        friendlyNames[device.id] = display
+        store.saveNames(friendlyNames)
+        addSetupError = nil
+        connectFromAdd = true
+        upsert(device, selectIfIdle: false)
+        select(fresh(device))
     }
 
     func select(_ device: TVDevice) {
@@ -353,6 +384,8 @@ final class RemoteSession {
             }
             upsert(device, selectIfIdle: false)
             showManualAdd = false
+            showAdvanced = false
+            connectFromAdd = true
             select(fresh(device))
             return nil
         }
@@ -371,6 +404,8 @@ final class RemoteSession {
             }
             upsert(device, selectIfIdle: false)
             showManualAdd = false
+            showAdvanced = false
+            connectFromAdd = true
             select(fresh(device))
             return nil
         }
@@ -427,12 +462,31 @@ final class RemoteSession {
             pairingError = nil
             linkState = .connected
             statusText = "Connected"
+            if connectFromAdd {
+                connectFromAdd = false
+                addSetupError = nil
+                showAddTV = false
+                if let device = activeDevice {
+                    showBanner(displayName(for: device))
+                }
+            }
             considerRenamePrompt()
         case let .notFound(message):
             pairing = nil
             linkState = .notFound
             statusText = message
+            if connectFromAdd {
+                connectFromAdd = false
+                addSetupError = message
+            }
         case let .connectionLost(message):
+            if connectFromAdd {
+                connectFromAdd = false
+                addSetupError = message
+                linkState = .notFound
+                statusText = message
+                return
+            }
             if suppressReconnect {
                 linkState = .idle
                 statusText = "Turned off"
@@ -586,6 +640,36 @@ final class RemoteSession {
             taken.insert(unique)
         }
         resolvedNames = result
+    }
+
+    private func noteDiscovered(_ found: TVDevice) {
+        guard found.brand.isOffered else { return }
+        if let index = discovered.firstIndex(where: { $0.id == found.id }) {
+            discovered[index] = found
+        } else {
+            discovered.append(found)
+        }
+        guard let saved = devices.firstIndex(where: { $0.id == found.id }) else { return }
+        if devices[saved].macAddress == nil {
+            devices[saved].macAddress = found.macAddress
+        }
+        if devices[saved].modelName == nil {
+            devices[saved].modelName = found.modelName
+        }
+        persist()
+    }
+
+    private func showBanner(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        connectedBanner = trimmed
+        Haptics.success()
+        bannerTask?.cancel()
+        bannerTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.connectedBanner = nil
+        }
     }
 
     private func upsert(_ found: TVDevice, selectIfIdle: Bool = true) {

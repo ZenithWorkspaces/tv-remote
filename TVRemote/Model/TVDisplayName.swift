@@ -80,6 +80,28 @@ enum TVDisplayName {
     }
 }
 
+enum AddTVCopy {
+    static let allow = "Your TV will ask to allow this phone. Choose Allow with your TV remote."
+    static let pin = "Your TV will show a PIN. You'll type it in next."
+    static let roku = "Roku connects right away."
+    static let empty = "No TVs found. Make sure your TV is on and connected to the same Wi-Fi as this phone."
+
+    static func instruction(brand: TVBrand, samsungShowsPIN: Bool) -> String {
+        switch brand {
+        case .roku:
+            return roku
+        case .lg, .firetv:
+            return allow
+        case .samsung:
+            return samsungShowsPIN ? pin : allow
+        case .androidtv, .vizio:
+            return pin
+        case .sony:
+            return allow
+        }
+    }
+}
+
 struct ShortcutLayout: Codable, Equatable {
     var order: [String]
     var hidden: [String]

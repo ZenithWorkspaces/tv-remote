@@ -4,10 +4,14 @@ import UIKit
 enum Haptics {
     private static let tapImpact = UIImpactFeedbackGenerator(style: .medium)
     private static let firmImpact = UIImpactFeedbackGenerator(style: .heavy)
+    private static let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private static let notice = UINotificationFeedbackGenerator()
 
     static func prepare() {
         tapImpact.prepare()
         firmImpact.prepare()
+        lightImpact.prepare()
+        notice.prepare()
     }
 
     static func tap() {
@@ -17,6 +21,16 @@ enum Haptics {
 
     static func firmTap() {
         firmImpact.impactOccurred(intensity: 1.0)
+        prepare()
+    }
+
+    static func lightTap() {
+        lightImpact.impactOccurred(intensity: 1.0)
+        prepare()
+    }
+
+    static func success() {
+        notice.notificationOccurred(.success)
         prepare()
     }
 }
@@ -46,6 +60,12 @@ struct RemoteView: View {
                 controls
             }
         }
+        .sheet(isPresented: $session.showAddTV) {
+            AddTVSheet(session: session)
+        }
+        .sheet(isPresented: $session.showAdvanced) {
+            AdvancedSheet(session: session)
+        }
         .sheet(isPresented: $session.showManualAdd) {
             ManualAddSheet(session: session)
         }
@@ -55,7 +75,7 @@ struct RemoteView: View {
         .sheet(isPresented: $session.showInputs) {
             InputSheet(session: session)
         }
-        .sheet(item: $session.pairing) { request in
+        .sheet(item: rootPairing) { request in
             PairingSheet(session: session, request: request)
         }
         .sheet(isPresented: $session.showRename, onDismiss: { session.dismissRename() }) {
@@ -68,6 +88,13 @@ struct RemoteView: View {
             Text("Saved pairing keys for this TV are removed from this phone.")
         }
         .onAppear { Haptics.prepare() }
+    }
+
+    private var rootPairing: Binding<PairingRequest?> {
+        Binding(
+            get: { session.showAddTV ? nil : session.pairing },
+            set: { session.pairing = $0 }
+        )
     }
 
     private var showsError: Bool {
@@ -88,7 +115,9 @@ struct RemoteView: View {
                 powerButton(stage)
                 nameControl(stage)
                 moreButton(stage)
-                if showsError {
+                if let banner = session.connectedBanner {
+                    connectedBanner(banner, stage)
+                } else if showsError {
                     statusLine(stage)
                 }
                 controlRow(stage)
@@ -163,10 +192,6 @@ struct RemoteView: View {
     private func moreButton(_ stage: Stage) -> some View {
         Menu {
             televisionMenu
-            Button("Scan Wi-Fi") { session.rescan() }
-            if session.activeDevice != nil {
-                Button("Forget this TV", role: .destructive) { session.confirmForget = true }
-            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: stage.s(13), weight: .black))
@@ -194,8 +219,28 @@ struct RemoteView: View {
             }
         }
         if !session.devices.isEmpty { Divider() }
+        Button("Add TV") { session.beginAddTV() }
         Button("Rename") { session.beginRename() }
-        Button("Add TV") { session.showManualAdd = true }
+        Button("Advanced") { session.showAdvanced = true }
+        if session.activeDevice != nil {
+            Button("Forget this TV", role: .destructive) { session.confirmForget = true }
+        }
+    }
+
+    private func connectedBanner(_ name: String, _ stage: Stage) -> some View {
+        HStack(spacing: stage.s(8)) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: stage.s(16), weight: .semibold))
+                .foregroundStyle(Color.remoteOK)
+            Text("Connected to \(name)")
+                .font(.system(size: stage.s(15), weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, stage.s(14))
+        .frame(height: stage.s(36))
+        .background(Color.remoteOK.opacity(0.16), in: Capsule())
+        .position(x: stage.x(16 + 185), y: stage.y(122) + stage.s(16))
     }
 
     private func statusLine(_ stage: Stage) -> some View {
@@ -437,14 +482,12 @@ struct RemoteView: View {
             Text("No Ads Remote")
                 .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(.white)
-            Text(session.isScanning ? "Looking on this Wi-Fi…" : "No TV yet. Scan the network or add one by IP address.")
+            Text("Add a TV on this Wi-Fi to start.")
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
-            Button("Scan Wi-Fi") { session.rescan() }
+            Button("Add TV") { session.beginAddTV() }
                 .buttonStyle(RemoteFillStyle(tint: .remoteAccent))
-            Button("Add by IP") { session.showManualAdd = true }
-                .buttonStyle(RemoteFillStyle(tint: .remoteButton))
         }
         .padding(24)
     }
@@ -701,7 +744,7 @@ private struct RenameSheet: View {
     }
 }
 
-private struct RemoteFillStyle: ButtonStyle {
+struct RemoteFillStyle: ButtonStyle {
     var tint: Color
 
     func makeBody(configuration: Configuration) -> some View {
@@ -713,8 +756,9 @@ private struct RemoteFillStyle: ButtonStyle {
     }
 }
 
-private struct ManualAddSheet: View {
+struct ManualAddSheet: View {
     var session: RemoteSession
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
     @State private var host = ""
     @State private var name = ""
@@ -725,8 +769,18 @@ private struct ManualAddSheet: View {
     private let choices = ["Auto", "Roku", "LG webOS", "Samsung", "Android TV", "Vizio", "Fire TV"]
 
     var body: some View {
-        NavigationStack {
-            Form {
+        if embedded {
+            form
+                .navigationTitle("Add by IP address")
+                .navigationBarTitleDisplayMode(.inline)
+        } else {
+            NavigationStack { form }
+                .preferredColorScheme(.dark)
+        }
+    }
+
+    private var form: some View {
+        Form {
                 Section("TV") {
                     TextField("IP address", text: $host)
                         .keyboardType(.decimalPad)
@@ -746,19 +800,20 @@ private struct ManualAddSheet: View {
                     }
                 }
             }
-            .navigationTitle("Add TV")
+            .navigationTitle(embedded ? "Add by IP address" : "Add TV")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    if !embedded {
+                        Button("Cancel") { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(saving ? "Adding…" : "Add") { add() }
                         .disabled(saving || host.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-        }
-        .preferredColorScheme(.dark)
+            .preferredColorScheme(.dark)
     }
 
     private func add() {
@@ -848,7 +903,7 @@ private struct InputSheet: View {
     }
 }
 
-private struct PairingSheet: View {
+struct PairingSheet: View {
     @Bindable var session: RemoteSession
     var request: PairingRequest
     @Environment(\.dismiss) private var dismiss
