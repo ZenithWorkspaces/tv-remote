@@ -216,6 +216,10 @@ enum ASN1 {
 }
 
 enum HexBytes {
+    static func encode(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
+
     static func decode(_ text: String) -> Data? {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, cleaned.count % 2 == 0, cleaned.allSatisfy(\.isHexDigit) else { return nil }

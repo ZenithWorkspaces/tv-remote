@@ -9,6 +9,7 @@ protocol SecretProviding: AnyObject {
 enum SecretAccount {
     static func lgClientKey(_ id: String) -> String { "lg.client-key.\(id)" }
     static func samsungToken(_ id: String) -> String { "samsung.token.\(id)" }
+    static func samsungEncrypted(_ id: String) -> String { "samsung.encrypted.\(id)" }
     static func sonyPSK(_ id: String) -> String { "sony.psk.\(id)" }
     static func vizioAuth(_ id: String) -> String { "vizio.auth.\(id)" }
     static func vizioDevice(_ id: String) -> String { "vizio.device.\(id)" }

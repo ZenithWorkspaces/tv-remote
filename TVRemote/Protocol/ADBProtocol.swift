@@ -257,6 +257,40 @@ struct BigUInt: Equatable {
         return result
     }
 
+    /// `base^exponent mod modulus` for the Samsung J/H key exchange.
+    static func modPow(base: BigUInt, exponent: BigUInt, modulus: BigUInt) -> BigUInt {
+        guard !modulus.isZero else { return BigUInt(words: [0]) }
+        var result = BigUInt(words: [1])
+        var value = base.remainder(dividingBy: modulus)
+        var exp = exponent
+        while !exp.isZero {
+            if exp.words.first.map({ $0 & 1 == 1 }) == true {
+                result = result.multiplied(by: value).remainder(dividingBy: modulus)
+            }
+            exp = exp.shiftedRight(1)
+            if !exp.isZero {
+                value = value.multiplied(by: value).remainder(dividingBy: modulus)
+            }
+        }
+        return result
+    }
+
+    private func shiftedRight(_ bits: Int) -> BigUInt {
+        guard bits > 0 else { return self }
+        let wordShift = bits / 32
+        let bitShift = bits % 32
+        guard wordShift < words.count else { return BigUInt(words: [0]) }
+        var result = Array(words.dropFirst(wordShift))
+        if bitShift == 0 { return BigUInt(words: result) }
+        var carry: UInt32 = 0
+        for index in stride(from: result.count - 1, through: 0, by: -1) {
+            let word = result[index]
+            result[index] = (word >> bitShift) | carry
+            carry = bitShift == 0 ? 0 : word << (32 - bitShift)
+        }
+        return BigUInt(words: result)
+    }
+
     private func multiplied(by other: BigUInt) -> BigUInt {
         if isZero || other.isZero { return BigUInt(words: [0]) }
         var result = [UInt32](repeating: 0, count: words.count + other.words.count)
