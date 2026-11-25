@@ -82,6 +82,7 @@ enum TVDisplayName {
 
 enum AddTVCopy {
     static let allow = "Your TV will ask to allow this phone. Choose Allow with your TV remote."
+    static let lg = "Your TV will show a PIN. Type it in here. If it asks you to allow the phone instead, press the joystick under the TV."
     static let pin = "Your TV will show a PIN. You'll type it in next."
     static let roku = "Roku connects right away."
     static let empty = "No TVs found. Make sure your TV is on and connected to the same Wi-Fi as this phone."
@@ -90,7 +91,9 @@ enum AddTVCopy {
         switch brand {
         case .roku:
             return roku
-        case .lg, .firetv:
+        case .lg:
+            return lg
+        case .firetv:
             return allow
         case .samsung:
             return samsungShowsPIN ? pin : allow

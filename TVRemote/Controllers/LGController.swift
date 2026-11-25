@@ -3,11 +3,26 @@ import Foundation
 enum LGAttemptResult: Equatable {
     case connected
     case failed
-    case pinUnsupported
+    case stop(String)
 }
 
-final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessionWebSocketDelegate {
+final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessionTaskDelegate, URLSessionWebSocketDelegate {
     var onEvent: ((ControllerEvent) -> Void)?
+
+    private enum Phase {
+        case opening
+        case hello
+        case register
+        case user
+        case connected
+    }
+
+    private enum WaitKind {
+        case open
+        case hello
+        case register
+        case user
+    }
 
     private var host = ""
     private var deviceID = ""
@@ -26,10 +41,16 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
     private var attemptToken = 0
     private var openOnce: OnceResume<LGAttemptResult>?
     private var timeoutTask: Task<Void, Never>?
-    private var pairingMode: LGSSAP.PairingMode = .pin
-    private var pinPromptSeen = false
-    private var showedPinThisOpen = false
-    private var awaitingPinCheck = false
+    private var timeoutGeneration = 0
+    private var handshake = LGHandshake(manifest: .signed)
+    private var phase: Phase = .opening
+    private var userPromptVisible = false
+    private var helloRejected = false
+    private var socketOpened = false
+    private var socketEnded = false
+    private var attemptScheme = "wss"
+    private var attemptPort = LGSSAP.securePort
+    private var tried: Set<String> = []
 
     func connect(device: TVDevice, secrets: SecretProviding) {
         host = device.host
@@ -37,20 +58,21 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         self.secrets = secrets
         stopped = false
         registered = false
-        showedPinThisOpen = false
+        helloRejected = false
+        tried = []
         Task { [weak self] in
             await self?.open()
         }
     }
 
     func submitPairing(_ value: String) {
-        guard pairingMode == .pin, pinPromptSeen else { return }
+        guard handshake.pairing == .pin, userPromptVisible else { return }
         let pin = value.filter(\.isNumber)
         guard !pin.isEmpty else {
             emit(.pairingRejected("Enter the PIN shown on the TV."))
             return
         }
-        awaitingPinCheck = true
+        handshake.waitingForPIN = true
         let data = LGSSAP.requestData(
             id: LGSSAP.setPinRequestID,
             uri: LGSSAP.setPinURI,
@@ -58,18 +80,14 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         )
         guard let text = String(data: data, encoding: .utf8) else { return }
         commandSocket?.send(.string(text)) { _ in }
+        schedule(.user)
     }
 
     func disconnect() {
         stopped = true
         timeoutTask?.cancel()
-        commandSocket?.cancel(with: .goingAway, reason: nil)
-        pointerSocket?.cancel(with: .goingAway, reason: nil)
-        session?.invalidateAndCancel()
-        session = nil
-        commandSocket = nil
-        pointerSocket = nil
-        pointerReady = false
+        finish(.failed)
+        teardownSocket()
     }
 
     func press(_ key: RemoteKey) {
@@ -117,30 +135,42 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
     }
 
     private func open() async {
-        let endpoints = [("wss", LGSSAP.securePort), ("ws", LGSSAP.plainPort)]
-        for (scheme, port) in endpoints {
-            if stopped { return }
-            let pinResult = await attempt(scheme: scheme, port: port, mode: .pin)
-            if pinResult == .connected || stopped { return }
-            if pinResult == .pinUnsupported {
-                let promptResult = await attempt(scheme: scheme, port: port, mode: .prompt)
-                if promptResult == .connected || stopped { return }
+        let steps: [(String, Int, LGSSAP.Manifest)] = [
+            ("wss", LGSSAP.securePort, .signed),
+            ("wss", LGSSAP.securePort, .unsigned),
+            ("ws", LGSSAP.plainPort, .signed),
+            ("ws", LGSSAP.plainPort, .unsigned)
+        ]
+        for (scheme, port, manifest) in steps {
+            if stopped || registered { return }
+            let key = stepKey(scheme: scheme, port: port, manifest: manifest)
+            if tried.contains(key) { continue }
+            let result = await attempt(scheme: scheme, port: port, manifest: manifest)
+            switch result {
+            case .connected:
+                return
+            case let .stop(message):
+                guard !stopped else { return }
+                emit(.notFound(message))
+                return
+            case .failed:
+                break
             }
         }
         guard !stopped, !registered else { return }
-        if showedPinThisOpen {
-            emit(.notFound("Couldn't finish pairing. Try again and enter the PIN shown on the TV."))
-        } else {
-            emit(.notFound("LG TV not found at \(host). Turn it on, then try again."))
-        }
+        emit(.notFound("Couldn't pair with the LG TV at \(host). Leave it on and try again. If no PIN or Allow prompt appears, remove the TV in the app and add it again."))
     }
 
-    private func attempt(scheme: String, port: Int, mode: LGSSAP.PairingMode) async -> LGAttemptResult {
+    private func attempt(scheme: String, port: Int, manifest: LGSSAP.Manifest) async -> LGAttemptResult {
         attemptToken += 1
-        let token = attemptToken
-        pairingMode = mode
-        pinPromptSeen = false
-        awaitingPinCheck = false
+        handshake = LGHandshake(manifest: manifest)
+        phase = .opening
+        userPromptVisible = false
+        socketOpened = false
+        socketEnded = false
+        attemptScheme = scheme
+        attemptPort = port
+        tried.insert(stepKey(scheme: scheme, port: port, manifest: manifest))
         teardownSocket()
         let trustSession = URLSession(
             configuration: ephemeralConfiguration(),
@@ -149,58 +179,170 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         )
         session = trustSession
         guard let url = URL(string: "\(scheme)://\(host):\(port)") else { return .failed }
+        emit(.diagnostic("LG opening \(scheme)://\(host):\(port) (\(manifest == .signed ? "signed" : "unsigned") registration)"))
         let socket = trustSession.webSocketTask(with: url)
         commandSocket = socket
         return await withCheckedContinuation { continuation in
-            let once = OnceResume(continuation)
-            openOnce = once
-            scheduleTimeout(token: token, nanoseconds: mode == .pin ? 12_000_000_000 : 90_000_000_000)
+            openOnce = OnceResume(continuation)
+            schedule(.open)
             socket.resume()
         }
     }
 
-    private func scheduleTimeout(token: Int, nanoseconds: UInt64) {
+    private func stepKey(scheme: String, port: Int, manifest: LGSSAP.Manifest) -> String {
+        "\(scheme):\(port):\(manifest == .signed ? "signed" : "unsigned")"
+    }
+
+    private func schedule(_ kind: WaitKind) {
+        timeoutGeneration += 1
+        let generation = timeoutGeneration
+        let token = attemptToken
         timeoutTask?.cancel()
+        let nanoseconds: UInt64
+        switch kind {
+        case .open: nanoseconds = 8_000_000_000
+        case .hello: nanoseconds = 1_500_000_000
+        case .register: nanoseconds = 8_000_000_000
+        case .user: nanoseconds = 90_000_000_000
+        }
         timeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: nanoseconds)
             guard !Task.isCancelled else { return }
             DispatchQueue.main.async {
-                guard let self, self.attemptToken == token, !self.registered else { return }
-                if self.pairingMode == .pin, !self.pinPromptSeen {
-                    self.finishAttempt(.pinUnsupported)
-                } else if self.pairingMode == .pin, self.pinPromptSeen {
-                    self.emit(.pairingRejected("PIN entry timed out. Try connecting again."))
-                    self.finishAttempt(.failed)
-                } else {
-                    self.finishAttempt(.failed)
-                }
+                guard let self, self.timeoutGeneration == generation, self.attemptToken == token, !self.stopped, !self.registered else { return }
+                self.handleTimeout(kind)
             }
         }
     }
 
-    private func finishAttempt(_ result: LGAttemptResult) {
-        timeoutTask?.cancel()
-        openOnce?.resume(result)
-        if result != .connected {
-            commandSocket?.cancel(with: .goingAway, reason: nil)
+    private func handleTimeout(_ kind: WaitKind) {
+        switch kind {
+        case .open:
+            noteSchemeUnreachable()
+            emit(.diagnostic("LG socket timed out before it opened."))
+            finish(.failed)
+        case .hello:
+            finishHelloAndRegister()
+        case .register:
+            emit(.diagnostic("LG registration did not answer. Trying the next handshake."))
+            apply(handshake.timedOutWaitingForRegister())
+        case .user:
+            finish(.stop("Pairing timed out. Check the TV for a PIN or an Allow prompt, then try again."))
         }
     }
 
+    /// A port that never opens will not open for the other registration style either.
+    private func noteSchemeUnreachable() {
+        tried.insert(stepKey(scheme: attemptScheme, port: attemptPort, manifest: .signed))
+        tried.insert(stepKey(scheme: attemptScheme, port: attemptPort, manifest: .unsigned))
+    }
+
+    private func finish(_ result: LGAttemptResult) {
+        timeoutTask?.cancel()
+        if result != .connected {
+            socketEnded = true
+        }
+        // Capture the socket before resuming. The next attempt can replace
+        // `commandSocket` if this continuation runs before the function returns.
+        let closing = result == .connected ? nil : commandSocket
+        openOnce?.resume(result)
+        closing?.cancel(with: .goingAway, reason: nil)
+    }
+
     private func teardownSocket() {
-        commandSocket?.cancel(with: .goingAway, reason: nil)
-        pointerSocket?.cancel(with: .goingAway, reason: nil)
-        session?.invalidateAndCancel()
+        let command = commandSocket
+        let pointer = pointerSocket
+        let current = session
         commandSocket = nil
         pointerSocket = nil
         pointerReady = false
         session = nil
+        command?.cancel(with: .goingAway, reason: nil)
+        pointer?.cancel(with: .goingAway, reason: nil)
+        current?.invalidateAndCancel()
+    }
+
+    private func finishHelloAndRegister() {
+        guard phase == .hello else { return }
+        sendRegister()
     }
 
     private func sendRegister() {
-        let key = secrets?.string(for: SecretAccount.lgClientKey(deviceID))
-        guard let text = String(data: LGSSAP.registerData(clientKey: key, pairingType: pairingMode), encoding: .utf8) else { return }
+        phase = .register
+        let stored = handshake.droppedClientKey ? nil : secrets?.string(for: SecretAccount.lgClientKey(deviceID))
+        let key = (stored?.isEmpty == false) ? stored : nil
+        handshake.sentClientKey = key != nil
+        tried.insert(stepKey(scheme: attemptScheme, port: attemptPort, manifest: handshake.manifest))
+        let style = handshake.manifest == .signed ? "signed" : "unsigned"
+        let keyNote = key == nil ? "no saved key" : "saved key"
+        emit(.diagnostic("LG registering (\(style), \(keyNote), \(handshake.pairing.rawValue))"))
+        send(LGSSAP.registerObject(clientKey: key, pairingType: handshake.pairing, manifest: handshake.manifest))
+        if !userPromptVisible {
+            schedule(.register)
+        }
+    }
+
+    private func send(_ object: [String: Any]) {
+        guard let text = String(data: JSONBox.data(object), encoding: .utf8), text != "{}" else { return }
         commandSocket?.send(.string(text)) { _ in }
-        receive(commandSocket)
+    }
+
+    private func apply(_ move: LGHandshakeMove) {
+        switch move {
+        case let .saveKeyAndConnect(key):
+            if let key, !key.isEmpty {
+                secrets?.set(key, for: SecretAccount.lgClientKey(deviceID))
+            }
+            guard !registered else { return }
+            registered = true
+            phase = .connected
+            timeoutTask?.cancel()
+            emit(.connected)
+            emit(.inputs(LGSSAP.defaultInputs))
+            finish(.connected)
+            sendRequest(uri: LGSSAP.pointerSocketURI, payload: LGPayload())
+            sendRequest(uri: LGSSAP.connectionInfoURI, payload: LGPayload())
+            sendRequest(uri: LGSSAP.launchPointsURI, payload: LGPayload())
+        case .showPIN:
+            userPromptVisible = true
+            phase = .user
+            handshake.pairing = .pin
+            emit(.diagnostic("LG asked for a PIN."))
+            emit(.pairingRequired(.pin("Type the code shown on the TV.")))
+            schedule(.user)
+        case .showPrompt:
+            userPromptVisible = true
+            phase = .user
+            handshake.pairing = .prompt
+            emit(.diagnostic("LG asked for an Allow prompt."))
+            emit(.pairingRequired(.acceptOnTV("Accept No Ads Remote on the TV. The joystick button under the TV presses OK.")))
+            schedule(.user)
+        case .wrongPIN:
+            emit(.pairingRejected("That PIN didn't match. Check the TV and try again."))
+            schedule(.user)
+        case let .sendRegister(manifest, dropClientKey, pairing):
+            handshake.manifest = manifest
+            handshake.pairing = pairing
+            if dropClientKey {
+                forgetClientKey()
+            }
+            sendRegister()
+        case .giveUp:
+            emit(.diagnostic("LG registration was rejected."))
+            finish(.failed)
+        case .ignore:
+            break
+        }
+    }
+
+    private func forgetClientKey() {
+        let hadKey = secrets?.string(for: SecretAccount.lgClientKey(deviceID))?.isEmpty == false
+        handshake.droppedClientKey = true
+        handshake.sentClientKey = false
+        secrets?.set(nil, for: SecretAccount.lgClientKey(deviceID))
+        if hadKey {
+            emit(.diagnostic("LG forgot the saved client key so the TV can pair again."))
+        }
     }
 
     private func perform(_ command: LGCommand) {
@@ -238,7 +380,14 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
             guard let self, !self.stopped else { return }
             switch result {
             case let .success(message):
-                if case let .string(text) = message {
+                let text: String?
+                switch message {
+                case let .string(value):
+                    text = value
+                case let .data(value):
+                    text = String(data: value, encoding: .utf8)
+                }
+                if task === self.commandSocket, let text {
                     self.handle(text)
                 }
                 self.receive(task)
@@ -248,46 +397,93 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
                     return
                 }
                 guard task === self.commandSocket else { return }
-                if self.registered {
-                    self.registered = false
-                    self.emit(.connectionLost("LG connection dropped. Reconnecting…"))
-                } else if self.pairingMode == .pin, !self.pinPromptSeen {
-                    self.finishAttempt(.pinUnsupported)
-                } else {
-                    self.finishAttempt(.failed)
-                }
+                self.commandSocketClosed()
             }
         }
+    }
+
+    private func commandSocketClosed() {
+        if registered {
+            registered = false
+            emit(.connectionLost("LG connection dropped. Reconnecting…"))
+            return
+        }
+        guard !socketEnded else { return }
+        socketEnded = true
+        if !socketOpened {
+            noteSchemeUnreachable()
+        }
+        if phase == .hello {
+            helloRejected = true
+        }
+        if phase == .user {
+            finish(.stop("The LG TV closed the connection before pairing finished. Try again."))
+            return
+        }
+        emit(.diagnostic("LG socket closed before pairing finished."))
+        finish(.failed)
     }
 
     private func handle(_ text: String) {
         guard let data = text.data(using: .utf8),
               let object = JSONBox.object(data) else { return }
-        let type = object["type"] as? String ?? ""
-        let payload = object["payload"] as? [String: Any] ?? [:]
-        if let pairing = (payload["pairingType"] as? String)?.uppercased() {
-            notePairingType(pairing)
-        }
-        if isWrongPin(type: type, id: object["id"] as? String, payload: payload, error: object["error"] as? String) {
-            awaitingPinCheck = false
-            emit(.pairingRejected("That PIN didn't match. Check the TV and try again."))
+        let type = (object["type"] as? String ?? "").lowercased()
+        if type == "hello" {
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            let types = payload["pairingTypes"] as? [String] ?? []
+            if !types.isEmpty {
+                emit(.diagnostic("LG TV pairing types: \(types.joined(separator: ", "))."))
+            }
+            if let mode = LGSSAP.pairingMode(advertised: types), mode != handshake.pairing, phase == .register, !userPromptVisible {
+                handshake.pairing = mode
+                sendRegister()
+                return
+            }
+            if let mode = LGSSAP.pairingMode(advertised: types) {
+                handshake.pairing = mode
+            }
+            finishHelloAndRegister()
             return
         }
-        if type == "registered" || payload["client-key"] != nil && type == "response" && object["id"] as? String == "register_0" {
-            if let key = payload["client-key"] as? String, !key.isEmpty {
-                secrets?.set(key, for: SecretAccount.lgClientKey(deviceID))
-            }
-            if !registered {
-                registered = true
-                timeoutTask?.cancel()
-                emit(.connected)
-                emit(.inputs(LGSSAP.defaultInputs))
-                finishAttempt(.connected)
-                sendRequest(uri: LGSSAP.pointerSocketURI, payload: LGPayload())
-                sendRequest(uri: LGSSAP.connectionInfoURI, payload: LGPayload())
-                sendRequest(uri: LGSSAP.launchPointsURI, payload: LGPayload())
-            }
+        if phase == .hello {
+            finishHelloAndRegister()
+            return
         }
+        guard !registered else {
+            if type == "error" {
+                let error = LGHandshake.failureText(object)
+                if !error.isEmpty {
+                    emit(.diagnostic("LG request failed: \(error)"))
+                }
+            }
+            noteControlMessage(object)
+            return
+        }
+        if phase == .user {
+            let move = handshake.consume(object)
+            switch move {
+            case .giveUp, .sendRegister:
+                break
+            default:
+                apply(move)
+            }
+            return
+        }
+        let move = handshake.consume(object)
+        if move != .ignore {
+            let error = LGHandshake.failureText(object)
+            if !error.isEmpty {
+                emit(.diagnostic("LG TV said: \(error)"))
+            }
+            apply(move)
+        }
+        if registered {
+            noteControlMessage(object)
+        }
+    }
+
+    private func noteControlMessage(_ object: [String: Any]) {
+        let payload = object["payload"] as? [String: Any] ?? [:]
         if let socketPath = payload["socketPath"] as? String {
             openPointer(socketPath)
         }
@@ -319,36 +515,6 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
                 emit(.inputs(inputs))
             }
         }
-        if type == "error", !registered {
-            if pairingMode == .pin, !pinPromptSeen {
-                finishAttempt(.pinUnsupported)
-            } else if !awaitingPinCheck {
-                finishAttempt(.failed)
-            }
-        }
-    }
-
-    private func notePairingType(_ pairing: String) {
-        pinPromptSeen = true
-        scheduleTimeout(token: attemptToken, nanoseconds: 90_000_000_000)
-        if pairing == "PIN" {
-            showedPinThisOpen = true
-            emit(.pairingRequired(.pin("Type the code shown on the TV.")))
-        } else if pairing == "PROMPT" {
-            emit(.pairingRequired(.acceptOnTV("Accept No Ads Remote on the TV. The joystick button under the TV presses OK.")))
-        }
-    }
-
-    private func isWrongPin(type: String, id: String?, payload: [String: Any], error: String?) -> Bool {
-        guard !registered, pairingMode == .pin, pinPromptSeen || awaitingPinCheck else { return false }
-        let failedResponse = type == "response" && payload["returnValue"] as? Bool == false
-        let failedRequest = type == "error" && (id == LGSSAP.setPinRequestID || awaitingPinCheck)
-        guard failedResponse || failedRequest else { return false }
-        let text = ((payload["errorText"] as? String) ?? error ?? "").lowercased()
-        if text.contains("not support") || (text.contains("unknown") && text.contains("pair")) {
-            return false
-        }
-        return id == LGSSAP.setPinRequestID || awaitingPinCheck || text.contains("pin")
     }
 
     private func openPointer(_ socketPath: String) {
@@ -376,18 +542,29 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         }
     }
 
+    private func acceptTrust(
+        _ challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        LocalNetworkTrust.handle(challenge, expectedHost: host, completionHandler: completionHandler)
+    }
+
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust,
-              challenge.protectionSpace.host == host else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        completionHandler(.useCredential, URLCredential(trust: trust))
+        acceptTrust(challenge, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        // WebSocket TLS challenges are delivered here. The session-level method is not enough.
+        acceptTrust(challenge, completionHandler: completionHandler)
     }
 
     func urlSession(
@@ -395,15 +572,26 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol `protocol`: String?
     ) {
-        if webSocketTask === commandSocket {
-            sendRegister()
-        } else if webSocketTask === pointerSocket {
-            pointerReady = true
-            let queued = pendingButtons
-            pendingButtons.removeAll()
-            for name in queued {
-                sendPointer(name)
+        guard webSocketTask === commandSocket else {
+            if webSocketTask === pointerSocket {
+                pointerReady = true
+                let queued = pendingButtons
+                pendingButtons.removeAll()
+                for name in queued {
+                    sendPointer(name)
+                }
             }
+            return
+        }
+        socketOpened = true
+        if helloRejected {
+            receive(commandSocket)
+            sendRegister()
+        } else {
+            phase = .hello
+            receive(commandSocket)
+            send(LGSSAP.helloObject())
+            schedule(.hello)
         }
     }
 
@@ -414,13 +602,6 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         reason: Data?
     ) {
         guard webSocketTask === commandSocket, !stopped else { return }
-        if registered {
-            registered = false
-            emit(.connectionLost("LG connection dropped. Reconnecting…"))
-        } else if pairingMode == .pin, !pinPromptSeen {
-            finishAttempt(.pinUnsupported)
-        } else {
-            finishAttempt(.failed)
-        }
+        commandSocketClosed()
     }
 }
