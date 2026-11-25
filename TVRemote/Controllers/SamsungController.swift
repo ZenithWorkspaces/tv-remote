@@ -601,13 +601,16 @@ final class SamsungController: NSObject, TVControlling, URLSessionDelegate, URLS
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust,
-              challenge.protectionSpace.host == host else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        completionHandler(.useCredential, URLCredential(trust: trust))
+        LocalNetworkTrust.handle(challenge, expectedHost: host, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        LocalNetworkTrust.handle(challenge, expectedHost: host, completionHandler: completionHandler)
     }
 
     func urlSession(

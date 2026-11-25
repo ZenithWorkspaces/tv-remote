@@ -80,6 +80,135 @@ final class SSAPMessageTests: XCTestCase {
         XCTAssertTrue(permissions.contains("CONTROL_AUDIO"))
     }
 
+    func testUnsignedRegisterDropsBlacklistedSignature() throws {
+        let fresh = try XCTUnwrap(JSONBox.object(LGSSAP.registerData(clientKey: nil, manifest: .unsigned)))
+        let payload = try XCTUnwrap(fresh["payload"] as? [String: Any])
+        XCTAssertNil(payload["client-key"])
+        XCTAssertEqual(payload["pairingType"] as? String, "PIN")
+        let manifest = try XCTUnwrap(payload["manifest"] as? [String: Any])
+        XCTAssertNil(manifest["signatures"])
+        let permissions = try XCTUnwrap(manifest["permissions"] as? [String])
+        XCTAssertTrue(permissions.contains("CONTROL_AUDIO"))
+        XCTAssertTrue(permissions.contains("CONTROL_MOUSE_AND_KEYBOARD"))
+        XCTAssertTrue(permissions.contains("CONTROL_INPUT_TEXT"))
+        XCTAssertTrue(permissions.contains("CONTROL_INPUT_JOYSTICK"))
+        XCTAssertTrue(permissions.contains("READ_POWER_STATE"))
+        let signed = try XCTUnwrap(manifest["signed"] as? [String: Any])
+        XCTAssertEqual(signed["appId"] as? String, "com.lge.test")
+        XCTAssertEqual(signed["serial"] as? String, "2f930e2d2cfe083771f68e4fe7bb07")
+        let names = try XCTUnwrap(signed["localizedAppNames"] as? [String: Any])
+        XCTAssertEqual(names[""] as? String, "LG Remote App")
+
+        let saved = try XCTUnwrap(JSONBox.object(
+            LGSSAP.registerData(clientKey: "stored-key", pairingType: .prompt, manifest: .unsigned)
+        ))
+        let savedPayload = try XCTUnwrap(saved["payload"] as? [String: Any])
+        XCTAssertEqual(savedPayload["client-key"] as? String, "stored-key")
+        XCTAssertEqual(savedPayload["pairingType"] as? String, "PROMPT")
+    }
+
+    func testBlacklistedCertificateRetriesUnsignedAndKeepsTheKey() {
+        var handshake = LGHandshake(manifest: .signed)
+        handshake.sentClientKey = true
+        let move = handshake.consume([
+            "type": "error",
+            "id": "register_0",
+            "error": "403 Pairing rejected: blacklisted certificate detected",
+            "payload": [String: Any]()
+        ] as [String: Any])
+        XCTAssertEqual(move, .sendRegister(.unsigned, dropClientKey: false, pairing: .pin))
+        XCTAssertFalse(handshake.droppedClientKey)
+        XCTAssertEqual(handshake.manifest, .unsigned)
+    }
+
+    func testRejectedClientKeyIsDroppedBeforeTheNextRegister() {
+        var handshake = LGHandshake(manifest: .unsigned)
+        handshake.sentClientKey = true
+        let move = handshake.consume([
+            "type": "error",
+            "id": "register_0",
+            "error": "401 insufficient permissions (not registered)",
+            "payload": [String: Any]()
+        ] as [String: Any])
+        XCTAssertEqual(move, .sendRegister(.unsigned, dropClientKey: true, pairing: .pin))
+        XCTAssertTrue(handshake.droppedClientKey)
+        XCTAssertFalse(handshake.sentClientKey)
+    }
+
+    func testPairingResponsesShowPINOrPrompt() {
+        var pin = LGHandshake(manifest: .unsigned)
+        XCTAssertEqual(pin.consume([
+            "type": "response",
+            "id": "register_0",
+            "payload": ["pairingType": "PIN", "returnValue": true] as [String: Any]
+        ]), .showPIN)
+
+        var magic = LGHandshake(manifest: .unsigned)
+        XCTAssertEqual(magic.consume([
+            "type": "response",
+            "id": "register_0",
+            "payload": ["pairingType": "LGSWITCH-PIN", "returnValue": true] as [String: Any]
+        ]), .showPIN)
+
+        var prompt = LGHandshake(manifest: .signed)
+        XCTAssertEqual(prompt.consume([
+            "type": "response",
+            "id": "register_0",
+            "payload": ["pairingType": "PROMPT", "returnValue": true] as [String: Any]
+        ]), .showPrompt)
+        XCTAssertEqual(prompt.pairing, .prompt)
+
+        var registered = LGHandshake(manifest: .unsigned)
+        XCTAssertEqual(registered.consume([
+            "type": "registered",
+            "id": "register_0",
+            "payload": ["client-key": "fresh-key"] as [String: Any]
+        ]), .saveKeyAndConnect("fresh-key"))
+    }
+
+    func testWrongPINDoesNotDropTheSession() {
+        var handshake = LGHandshake(manifest: .unsigned, pairing: .pin)
+        handshake.waitingForPIN = true
+        let move = handshake.consume([
+            "type": "error",
+            "id": LGSSAP.setPinRequestID,
+            "error": "wrong pin",
+            "payload": ["returnValue": false] as [String: Any]
+        ])
+        XCTAssertEqual(move, .wrongPIN)
+        XCTAssertFalse(handshake.droppedClientKey)
+    }
+
+    func testRegisterTimeoutFallsThroughThenStops() {
+        var handshake = LGHandshake(manifest: .signed)
+        XCTAssertEqual(
+            handshake.timedOutWaitingForRegister(),
+            .sendRegister(.unsigned, dropClientKey: false, pairing: .pin)
+        )
+        XCTAssertEqual(
+            handshake.timedOutWaitingForRegister(),
+            .sendRegister(.unsigned, dropClientKey: false, pairing: .prompt)
+        )
+        XCTAssertEqual(handshake.timedOutWaitingForRegister(), .giveUp)
+    }
+
+    func testAdvertisedPairingPrefersAPIN() {
+        XCTAssertEqual(LGSSAP.pairingMode(advertised: ["PROMPT", "PIN", "COMBINED", "LGSWITCH-PIN"]), .pin)
+        XCTAssertEqual(LGSSAP.pairingMode(advertised: ["PROMPT"]), .prompt)
+        XCTAssertNil(LGSSAP.pairingMode(advertised: []))
+    }
+
+    func testLocalTrustStaysOnTheTV() {
+        XCTAssertTrue(LocalNetworkTrust.accepts("192.168.1.20", expectedHost: "192.168.1.20"))
+        XCTAssertTrue(LocalNetworkTrust.accepts("TV.local", expectedHost: "tv.local"))
+        XCTAssertTrue(LocalNetworkTrust.accepts("10.0.0.8", expectedHost: "192.168.1.20"))
+        XCTAssertFalse(LocalNetworkTrust.accepts("8.8.8.8", expectedHost: "192.168.1.20"))
+        XCTAssertFalse(LocalNetworkTrust.accepts("example.com", expectedHost: "192.168.1.20"))
+        XCTAssertTrue(LocalNetworkTrust.isLocal("10.1.2.3"))
+        XCTAssertTrue(LocalNetworkTrust.isLocal("fe80::1"))
+        XCTAssertFalse(LocalNetworkTrust.isLocal("8.8.4.4"))
+    }
+
     func testChannelAndMediaCommands() {
         guard case let .request(up, _) = LGSSAP.command(for: .channelUp) else {
             return XCTFail("channel up")

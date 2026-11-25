@@ -276,6 +276,13 @@ enum LGSSAP {
         case prompt = "PROMPT"
     }
 
+    /// `.signed` is the manifest older webOS still grants elevated permissions for.
+    /// `.unsigned` drops the signature block that firmware from 2026 rejects as a blacklisted certificate.
+    enum Manifest: Equatable {
+        case signed
+        case unsigned
+    }
+
     static let setPinURI = "ssap://pairing/setPin"
     static let setPinRequestID = "pairing_pin"
 
@@ -283,11 +290,32 @@ enum LGSSAP {
         LGPayload(strings: ["pin": pin])
     }
 
-    static func registerObject(clientKey: String?, pairingType: PairingMode = .pin) -> [String: Any] {
+    static func helloObject() -> [String: Any] {
+        [
+            "id": "hello",
+            "type": "hello",
+            "payload": [String: String]()
+        ]
+    }
+
+    /// PIN needs nothing pressed on the TV. Prefer it when the set advertises both.
+    static func pairingMode(advertised types: [String]) -> PairingMode? {
+        let upper = Set(types.map { $0.uppercased() })
+        guard !upper.isEmpty else { return nil }
+        if upper.contains("PIN") || upper.contains("LGSWITCH-PIN") { return .pin }
+        if upper.contains("PROMPT") || upper.contains("COMBINED") { return .prompt }
+        return nil
+    }
+
+    static func registerObject(
+        clientKey: String?,
+        pairingType: PairingMode = .pin,
+        manifest style: Manifest = .signed
+    ) -> [String: Any] {
         var payload: [String: Any] = [
             "forcePairing": false,
             "pairingType": pairingType.rawValue,
-            "manifest": manifest()
+            "manifest": manifest(style: style)
         ]
         if let clientKey, !clientKey.isEmpty {
             payload["client-key"] = clientKey
@@ -299,8 +327,12 @@ enum LGSSAP {
         ]
     }
 
-    static func registerData(clientKey: String?, pairingType: PairingMode = .pin) -> Data {
-        JSONBox.data(registerObject(clientKey: clientKey, pairingType: pairingType))
+    static func registerData(
+        clientKey: String?,
+        pairingType: PairingMode = .pin,
+        manifest style: Manifest = .signed
+    ) -> Data {
+        JSONBox.data(registerObject(clientKey: clientKey, pairingType: pairingType, manifest: style))
     }
 
     static var defaultInputs: [TVInput] {
@@ -319,8 +351,8 @@ enum LGSSAP {
     static let launchURI = "ssap://system.launcher/launch"
     static let insertTextURI = "ssap://com.webos.service.ime/insertText"
 
-    private static func manifest() -> [String: Any] {
-        [
+    private static func manifest(style: Manifest = .signed) -> [String: Any] {
+        var object: [String: Any] = [
             "manifestVersion": 1,
             "appVersion": "1.1",
             "signed": [
@@ -346,7 +378,20 @@ enum LGSSAP {
                 ]
             ]
         ]
+        guard style == .unsigned else { return object }
+        // The signature bytes are what current webOS blacklists. The signed
+        // identity stays so the TV still has an app name to show on the prompt.
+        object.removeValue(forKey: "signatures")
+        object["permissions"] = unsignedPermissions
+        return object
     }
+
+    /// Outer permissions plus the old signed-only ones, so an on-screen prompt
+    /// can grant the pointer socket and the keyboard without a certificate.
+    private static let unsignedPermissions: [String] = {
+        var seen = Set<String>()
+        return (manifestPermissions + signedPermissions).filter { seen.insert($0).inserted }
+    }()
 
     private static let signedPermissions = [
         "TEST_SECURE",
