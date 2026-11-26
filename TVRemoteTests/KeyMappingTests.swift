@@ -104,8 +104,45 @@ final class KeyMappingTests: XCTestCase {
         XCTAssertEqual(Array(packet.prefix(6)), Array(repeating: UInt8(0xFF), count: 6))
         XCTAssertEqual(packet[6], UInt8(0xAA))
         XCTAssertEqual(packet[11], UInt8(0xFF))
+        let repeated = packet.subdata(in: 6..<12)
+        for index in 0..<16 {
+            let start = 6 + index * 6
+            XCTAssertEqual(packet.subdata(in: start..<(start + 6)), repeated)
+        }
         XCTAssertEqual(WakeOnLAN.packet(mac: "aa-bb-cc-dd-ee-ff"), packet)
         XCTAssertNil(WakeOnLAN.packet(mac: "not-a-mac"))
+        XCTAssertEqual(WakeOnLAN.ports, [9, 7])
+        XCTAssertEqual(
+            WakeOnLAN.targets(host: "192.168.1.20", localAddress: "192.168.1.8"),
+            ["255.255.255.255", "192.168.1.255", "192.168.1.20"]
+        )
+        XCTAssertTrue(WakeOnLAN.isBroadcast("255.255.255.255"))
+        XCTAssertTrue(WakeOnLAN.isBroadcast("192.168.1.255"))
+        XCTAssertFalse(WakeOnLAN.isBroadcast("192.168.1.20"))
+    }
+
+    func testLGPowerStateTreatsStandbyAsOff() {
+        XCTAssertTrue(LGSSAP.isActivePower("Active"))
+        XCTAssertTrue(LGSSAP.isActivePower(" active "))
+        XCTAssertFalse(LGSSAP.isActivePower("Active Standby"))
+        XCTAssertFalse(LGSSAP.isActivePower("Screen Off"))
+        XCTAssertFalse(LGSSAP.isActivePower("Suspend"))
+        XCTAssertFalse(LGSSAP.isActivePower("unknown"))
+        XCTAssertEqual(LGSSAP.powerLabel(["state": "Screen Off"]), "Screen Off")
+        XCTAssertTrue(LGSSAP.requestFailed(["type": "error", "payload": [String: Any]()]))
+        XCTAssertTrue(LGSSAP.requestFailed([
+            "type": "response",
+            "payload": ["returnValue": false] as [String: Any]
+        ]))
+        XCTAssertFalse(LGSSAP.requestFailed([
+            "type": "response",
+            "payload": ["returnValue": true, "state": "Active"] as [String: Any]
+        ]))
+        let info: [String: Any] = [
+            "wired": ["macAddress": "11:11:11:11:11:11"] as [String: Any],
+            "wifi": ["macAddress": "aa:bb:cc:dd:ee:ff"] as [String: Any]
+        ]
+        XCTAssertEqual(MACAddress.preferred(in: info), "AA:BB:CC:DD:EE:FF")
     }
 
     func testDiscoveryPortsIncludeKnownTVPorts() {

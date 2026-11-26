@@ -129,6 +129,7 @@ final class RemoteSession {
     private var reconnectAttempt = 0
     private var reconnectTask: Task<Void, Never>?
     private var suppressReconnect = false
+    private var wakeTask: Task<Void, Never>?
 
     var activeDevice: TVDevice? {
         devices.first { $0.id == activeID }
@@ -331,6 +332,10 @@ final class RemoteSession {
             return
         }
         Haptics.firmTap()
+        if device.brand == .lg {
+            powerLG(device)
+            return
+        }
         if linkState == .connected {
             suppressReconnect = true
             controller?.press(.powerOff)
@@ -343,17 +348,58 @@ final class RemoteSession {
             WakeSender.send(mac: mac, host: device.host)
         }
         controller?.press(.powerOn)
-        if device.brand == .lg && device.macAddress == nil {
-            linkState = .notFound
-            statusText = "Turn the LG on once and connect so Wake-on-LAN can remember its MAC address."
-            return
-        }
         statusText = "Power on sent to \(displayName(for: device))"
         let generation = connectGeneration
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard let self, self.connectGeneration == generation else { return }
             self.connect(device, resetAttempts: true)
+        }
+    }
+
+    private func powerLG(_ device: TVDevice) {
+        if linkState == .connected {
+            logDiagnostic("LG power button while the socket is connected")
+            statusText = "Checking the LG…"
+            controller?.togglePower(mac: device.macAddress)
+            return
+        }
+        wakeLG(device)
+    }
+
+    private func wakeLG(_ device: TVDevice) {
+        wakeTask?.cancel()
+        guard let mac = device.macAddress else {
+            linkState = .notFound
+            statusText = "Connect once while the LG is on, and turn on Mobile TV On / Turn on via Wi-Fi in the TV settings."
+            logDiagnostic("LG wake skipped: no MAC saved")
+            return
+        }
+        let delivery = WakeSender.send(mac: mac, host: device.host)
+        logDiagnostic("LG wake unicast \(delivery.unicastSent), broadcast \(delivery.broadcastSent) of \(delivery.broadcastAttempts)")
+        if delivery.broadcastBlocked {
+            logDiagnostic("LG wake broadcast was blocked. This build has no multicast entitlement, so the packet went to the TV's last address.")
+        }
+        suppressReconnect = false
+        linkState = .reconnecting
+        statusText = "Waking \(displayName(for: device))…"
+        let generation = connectGeneration
+        wakeTask = Task { [weak self] in
+            for attempt in 1...6 {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let self, !Task.isCancelled, self.connectGeneration == generation else { return }
+                if self.linkState == .connected { return }
+                let secure = await TCPProbe.isOpen(host: device.host, port: UInt16(LGSSAP.securePort), timeout: 0.8)
+                let plain = secure ? false : await TCPProbe.isOpen(host: device.host, port: UInt16(LGSSAP.plainPort), timeout: 0.8)
+                self.logDiagnostic("LG wake poll \(attempt): \(secure || plain ? "socket open" : "still closed")")
+                if secure || plain {
+                    self.connect(device, resetAttempts: true)
+                    return
+                }
+            }
+            guard let self, self.connectGeneration == generation else { return }
+            self.linkState = .notFound
+            self.statusText = "The LG didn't wake up. Turn on Mobile TV On / Turn on via Wi-Fi in the TV settings, then try again."
         }
     }
 
@@ -443,6 +489,8 @@ final class RemoteSession {
     }
 
     private func connect(_ device: TVDevice, resetAttempts: Bool) {
+        wakeTask?.cancel()
+        wakeTask = nil
         if resetAttempts {
             reconnectAttempt = 0
             reconnectTask?.cancel()
@@ -469,6 +517,9 @@ final class RemoteSession {
         let created = ControllerFactory.make(brand: device.brand)
         controller = created
         created.onEvent = { [weak self] event in
+            if case .lgPower(.turningOff) = event {
+                self?.suppressReconnect = true
+            }
             Task { @MainActor in
                 guard let self, self.connectGeneration == generation else { return }
                 self.handle(event)
@@ -535,10 +586,15 @@ final class RemoteSession {
             inputs = found.filter { seen.insert($0.id).inserted }
         case let .learnedMAC(mac):
             guard let normalized = MACAddress.normalize(mac) else { return }
+            var saved = false
             updateActive { device in
                 if device.macAddress == nil {
                     device.macAddress = normalized
+                    saved = true
                 }
+            }
+            if saved {
+                logDiagnostic("Saved MAC \(normalized) for Wake-on-LAN")
             }
         case let .learnedName(name):
             guard !name.isEmpty, let id = activeID, friendlyNames[id] == nil else { return }
@@ -553,10 +609,35 @@ final class RemoteSession {
             }
         case .apps:
             break
+        case let .lgPower(notice):
+            handleLGPower(notice)
         case let .message(text):
             statusText = text
         case let .diagnostic(line):
             logDiagnostic(line)
+        }
+    }
+
+    private func handleLGPower(_ notice: LGPowerNotice) {
+        guard let device = activeDevice else { return }
+        switch notice {
+        case .turningOff:
+            suppressReconnect = true
+            linkState = .idle
+            statusText = "Turning off \(displayName(for: device))"
+        case let .turningOn(state):
+            suppressReconnect = false
+            if linkState != .connected {
+                linkState = .connected
+            }
+            statusText = "Turning the LG on from \(state)…"
+        case let .confirmed(state):
+            linkState = .connected
+            statusText = "The LG is on (\(state))."
+            logDiagnostic("LG power confirmed \(state)")
+        case let .stillOff(state):
+            statusText = "The LG stayed off (\(state)). Turn on Mobile TV On / Turn on via Wi-Fi in the TV settings."
+            logDiagnostic("LG power still \(state)")
         }
     }
 

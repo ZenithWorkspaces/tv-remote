@@ -49,21 +49,35 @@ enum MACAddress {
     }
 
     static func find(in object: Any) -> String? {
+        preferred(in: object)
+    }
+
+    /// Prefers a Wi-Fi MAC when the payload lists more than one. Wake-on-LAN
+    /// has to use the interface the TV is actually sleeping on.
+    static func preferred(in object: Any) -> String? {
+        var found: [(path: String, mac: String)] = []
+        gather(object, path: "", into: &found)
+        if let wifi = found.first(where: { $0.path.contains("wifi") || $0.path.contains("wlan") }) {
+            return wifi.mac
+        }
+        return found.first?.mac
+    }
+
+    private static func gather(_ object: Any, path: String, into found: inout [(path: String, mac: String)]) {
         if let dict = object as? [String: Any] {
-            for (key, value) in dict where key.lowercased().contains("mac") {
-                if let string = value as? String, let mac = normalize(string) {
-                    return mac
+            for (key, value) in dict {
+                let name = key.lowercased()
+                let next = path.isEmpty ? name : "\(path).\(name)"
+                if name.contains("mac"), let string = value as? String, let mac = normalize(string) {
+                    found.append((next, mac))
                 }
-            }
-            for value in dict.values {
-                if let nested = find(in: value) { return nested }
+                gather(value, path: next, into: &found)
             }
         } else if let array = object as? [Any] {
             for value in array {
-                if let nested = find(in: value) { return nested }
+                gather(value, path: path, into: &found)
             }
         }
-        return nil
     }
 }
 
@@ -206,7 +220,7 @@ enum LGSSAP {
         case .powerOn, .input:
             return .unsupported
         case .powerOff:
-            return .request(uri: "ssap://system/turnOff", payload: LGPayload())
+            return .request(uri: turnOffURI, payload: LGPayload())
         case .home:
             return .pointer("HOME")
         case .back:
@@ -348,8 +362,32 @@ enum LGSSAP {
     static let launchPointsURI = "ssap://com.webos.applicationManager/listLaunchPoints"
     static let inputListURI = "ssap://tv/getExternalInputList"
     static let connectionInfoURI = "ssap://com.webos.service.connectionmanager/getinfo"
+    static let systemInfoURI = "ssap://system/getSystemInfo"
+    static let powerStateURI = "ssap://com.webos.service.tvpower/power/getPowerState"
+    static let turnOnScreenURI = "ssap://com.webos.service.tvpower/power/turnOnScreen"
+    static let turnOffURI = "ssap://system/turnOff"
     static let launchURI = "ssap://system.launcher/launch"
     static let insertTextURI = "ssap://com.webos.service.ime/insertText"
+
+    /// Only the exact `Active` state means the screen is on. `Active Standby`
+    /// still has a websocket while the picture is off.
+    static func isActivePower(_ state: String) -> Bool {
+        state.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Active") == .orderedSame
+    }
+
+    static func powerLabel(_ payload: [String: Any]) -> String {
+        if let state = payload["state"] as? String, !state.isEmpty { return state }
+        if let state = payload["powerState"] as? String, !state.isEmpty { return state }
+        return "unknown"
+    }
+
+    static func requestFailed(_ object: [String: Any]?) -> Bool {
+        guard let object else { return true }
+        if (object["type"] as? String)?.lowercased() == "error" { return true }
+        let payload = (object["payload"] as? [String: Any]) ?? object
+        if payload["returnValue"] as? Bool == false { return true }
+        return false
+    }
 
     private static func manifest(style: Manifest = .signed) -> [String: Any] {
         var object: [String: Any] = [
@@ -720,6 +758,30 @@ enum VizioSmartCast {
 }
 
 enum WakeOnLAN {
+    static let ports: [UInt16] = [9, 7]
+
+    /// Global broadcast, the /24 directed broadcast, and the TV itself.
+    /// Directed broadcast and 255.255.255.255 need the multicast entitlement.
+    /// The unicast address does not.
+    static func targets(host: String?, localAddress: String?) -> [String] {
+        var targets = ["255.255.255.255"]
+        if let localAddress, let broadcast = LocalIPv4.subnetBroadcast(from: localAddress) {
+            targets.append(broadcast)
+        }
+        if let host, LocalIPv4.isValidIPv4(host) {
+            if let broadcast = LocalIPv4.subnetBroadcast(from: host) {
+                targets.append(broadcast)
+            }
+            targets.append(host)
+        }
+        var seen = Set<String>()
+        return targets.filter { seen.insert($0).inserted }
+    }
+
+    static func isBroadcast(_ address: String) -> Bool {
+        address == "255.255.255.255" || address.hasSuffix(".255")
+    }
+
     static func packet(mac: String) -> Data? {
         guard let bytes = macBytes(mac) else { return nil }
         var data = Data(repeating: 0xFF, count: 6)

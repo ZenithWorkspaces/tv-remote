@@ -68,38 +68,58 @@ enum LocalIPv4 {
     }
 }
 
+struct WakeDelivery: Equatable {
+    var unicastSent = 0
+    var broadcastSent = 0
+    var broadcastAttempts = 0
+    var broadcastBlocked: Bool { broadcastAttempts > 0 && broadcastSent == 0 }
+}
+
 enum WakeSender {
-    static func send(mac: String, host: String?) {
-        guard let packet = WakeOnLAN.packet(mac: mac) else { return }
+    /// Three bursts. Each burst goes to ports 9 and 7 on the global broadcast,
+    /// the subnet broadcast, and the TV's last address.
+    @discardableResult
+    static func send(mac: String, host: String?, repeats: Int = 3) -> WakeDelivery {
+        guard let packet = WakeOnLAN.packet(mac: mac) else { return WakeDelivery() }
         let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else { return WakeDelivery() }
         defer { close(fd) }
         var yes: Int32 = 1
         _ = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &yes, socklen_t(MemoryLayout<Int32>.size))
-        func blast(_ address: String, _ port: UInt16) {
-            var dest = sockaddr_in()
-            dest.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            dest.sin_family = sa_family_t(AF_INET)
-            dest.sin_port = port.bigEndian
-            dest.sin_addr.s_addr = inet_addr(address)
-            // 255.255.255.255 is a valid broadcast target and inet_addr reports it as INADDR_NONE.
-            packet.withUnsafeBytes { raw in
-                _ = withUnsafePointer(to: &dest) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                        sendto(fd, raw.baseAddress, raw.count, 0, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
+        let targets = WakeOnLAN.targets(host: host, localAddress: LocalIPv4.address())
+        var delivery = WakeDelivery()
+        let bursts = max(repeats, 1)
+        for _ in 0..<bursts {
+            for address in targets {
+                for port in WakeOnLAN.ports {
+                    let sent = blast(packet, address: address, port: port, fd: fd)
+                    if WakeOnLAN.isBroadcast(address) {
+                        delivery.broadcastAttempts += 1
+                        if sent { delivery.broadcastSent += 1 }
+                    } else if sent {
+                        delivery.unicastSent += 1
                     }
                 }
             }
         }
-        blast("255.255.255.255", 9)
-        blast("255.255.255.255", 7)
-        if let host {
-            blast(host, 9)
-            blast(host, 7)
-            if let broadcast = LocalIPv4.subnetBroadcast(from: host) {
-                blast(broadcast, 9)
+        return delivery
+    }
+
+    private static func blast(_ packet: Data, address: String, port: UInt16, fd: Int32) -> Bool {
+        var dest = sockaddr_in()
+        dest.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        dest.sin_family = sa_family_t(AF_INET)
+        dest.sin_port = port.bigEndian
+        dest.sin_addr.s_addr = inet_addr(address)
+        // 255.255.255.255 is a valid broadcast target and inet_addr reports it as INADDR_NONE.
+        let result = packet.withUnsafeBytes { raw in
+            withUnsafePointer(to: &dest) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                    sendto(fd, raw.baseAddress, raw.count, 0, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
             }
         }
+        return result == packet.count
     }
 }
 

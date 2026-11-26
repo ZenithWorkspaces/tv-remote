@@ -7,6 +7,13 @@ enum PairingKind: Equatable {
     case psk(String)
 }
 
+enum LGPowerNotice: Equatable {
+    case turningOff
+    case turningOn(String)
+    case confirmed(String)
+    case stillOff(String)
+}
+
 enum ControllerEvent {
     case connected
     case notFound(String)
@@ -19,6 +26,7 @@ enum ControllerEvent {
     case learnedName(String)
     case message(String)
     case diagnostic(String)
+    case lgPower(LGPowerNotice)
 }
 
 protocol TVControlling: AnyObject {
@@ -32,6 +40,7 @@ protocol TVControlling: AnyObject {
     func refreshInputs()
     func select(input: TVInput)
     func submitPairing(_ value: String)
+    func togglePower(mac: String?)
 }
 
 extension TVControlling {
@@ -39,6 +48,7 @@ extension TVControlling {
     func deleteBackward() {}
     func refreshInputs() {}
     func submitPairing(_ value: String) {}
+    func togglePower(mac: String?) {}
 }
 
 enum ControllerFactory {
