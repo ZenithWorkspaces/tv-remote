@@ -51,6 +51,9 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
     private var attemptScheme = "wss"
     private var attemptPort = LGSSAP.securePort
     private var tried: Set<String> = []
+    private var pendingRequests: [String: OnceResume<[String: Any]?>] = [:]
+    private var powerGeneration = 0
+    private var powerMAC: String?
 
     func connect(device: TVDevice, secrets: SecretProviding) {
         host = device.host
@@ -85,9 +88,24 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
 
     func disconnect() {
         stopped = true
+        powerGeneration += 1
         timeoutTask?.cancel()
+        let waiters = pendingRequests
+        pendingRequests = [:]
+        for waiter in waiters.values {
+            waiter.resume(nil)
+        }
         finish(.failed)
         teardownSocket()
+    }
+
+    func togglePower(mac: String?) {
+        powerMAC = mac
+        powerGeneration += 1
+        let generation = powerGeneration
+        Task { [weak self] in
+            await self?.runPowerToggle(generation)
+        }
     }
 
     func press(_ key: RemoteKey) {
@@ -302,6 +320,7 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
             finish(.connected)
             sendRequest(uri: LGSSAP.pointerSocketURI, payload: LGPayload())
             sendRequest(uri: LGSSAP.connectionInfoURI, payload: LGPayload())
+            sendRequest(uri: LGSSAP.systemInfoURI, payload: LGPayload())
             sendRequest(uri: LGSSAP.launchPointsURI, payload: LGPayload())
         case .showPIN:
             userPromptVisible = true
@@ -342,6 +361,89 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         secrets?.set(nil, for: SecretAccount.lgClientKey(deviceID))
         if hadKey {
             emit(.diagnostic("LG forgot the saved client key so the TV can pair again."))
+        }
+    }
+
+    private func runPowerToggle(_ generation: Int) async {
+        guard generation == powerGeneration, registered else { return }
+        emit(.diagnostic("LG power: reading getPowerState"))
+        let stateResponse = await request(id: "lg-power-state", uri: LGSSAP.powerStateURI)
+        guard generation == powerGeneration else { return }
+        let payload = (stateResponse?["payload"] as? [String: Any]) ?? [:]
+        let state = LGSSAP.powerLabel(payload)
+        let readable = stateResponse != nil && !LGSSAP.requestFailed(stateResponse)
+        emit(.diagnostic("LG power state: \(readable ? state : "no answer")"))
+        if readable, LGSSAP.isActivePower(state) {
+            emit(.lgPower(.turningOff))
+            sendRequest(uri: LGSSAP.turnOffURI, payload: LGPayload())
+            return
+        }
+        let seen = readable ? state : "unknown"
+        emit(.lgPower(.turningOn(seen)))
+        await wakeAndTurnScreenOn(generation, from: seen)
+    }
+
+    private func wakeAndTurnScreenOn(_ generation: Int, from state: String) async {
+        if let mac = powerMAC, !mac.isEmpty {
+            let delivery = WakeSender.send(mac: mac, host: host)
+            emit(.diagnostic("LG wake unicast \(delivery.unicastSent), broadcast \(delivery.broadcastSent) of \(delivery.broadcastAttempts)"))
+            if delivery.broadcastBlocked {
+                emit(.diagnostic("LG wake broadcast was blocked. This build has no multicast entitlement, so the packet went to the TV's last address."))
+            }
+        } else {
+            emit(.diagnostic("LG wake skipped: no MAC saved yet"))
+        }
+        guard generation == powerGeneration else { return }
+        let turnedOn = await request(id: "lg-power-on", uri: LGSSAP.turnOnScreenURI)
+        guard generation == powerGeneration else { return }
+        if LGSSAP.requestFailed(turnedOn) {
+            emit(.diagnostic("LG turnOnScreen failed. Sending POWER on the button socket."))
+            sendPointer("POWER")
+        } else {
+            emit(.diagnostic("LG turnOnScreen accepted from \(state)."))
+        }
+        var latest = state
+        for attempt in 1...4 {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard generation == powerGeneration, registered else { return }
+            let poll = await request(id: "lg-power-state-\(attempt)", uri: LGSSAP.powerStateURI)
+            guard generation == powerGeneration else { return }
+            let payload = (poll?["payload"] as? [String: Any]) ?? [:]
+            latest = LGSSAP.powerLabel(payload)
+            emit(.diagnostic("LG power state after wake \(attempt): \(poll == nil ? "no answer" : latest)"))
+            if poll != nil, LGSSAP.isActivePower(latest) {
+                emit(.lgPower(.confirmed(latest)))
+                return
+            }
+        }
+        emit(.lgPower(.stillOff(latest)))
+    }
+
+    private func request(id: String, uri: String) async -> [String: Any]? {
+        await withCheckedContinuation { continuation in
+            let start = { [weak self] in
+                guard let self, self.registered, self.commandSocket != nil else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let once = OnceResume<[String: Any]?>(continuation)
+                self.pendingRequests[id] = once
+                let data = LGSSAP.requestData(id: id, uri: uri)
+                if let text = String(data: data, encoding: .utf8) {
+                    self.commandSocket?.send(.string(text)) { _ in }
+                }
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    DispatchQueue.main.async {
+                        self?.pendingRequests.removeValue(forKey: id)?.resume(nil)
+                    }
+                }
+            }
+            if Thread.isMainThread {
+                start()
+            } else {
+                DispatchQueue.main.async(execute: start)
+            }
         }
     }
 
@@ -450,6 +552,9 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
             return
         }
         guard !registered else {
+            if let id = object["id"] as? String, let waiter = pendingRequests.removeValue(forKey: id) {
+                waiter.resume(object)
+            }
             if type == "error" {
                 let error = LGHandshake.failureText(object)
                 if !error.isEmpty {
@@ -487,7 +592,7 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         if let socketPath = payload["socketPath"] as? String {
             openPointer(socketPath)
         }
-        if let mac = MACAddress.find(in: payload) {
+        if let mac = MACAddress.preferred(in: payload) {
             emit(.learnedMAC(mac))
         }
         if let points = payload["launchPoints"] as? [[String: Any]] {
