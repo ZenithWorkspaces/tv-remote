@@ -54,6 +54,7 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
     private var pendingRequests: [String: OnceResume<[String: Any]?>] = [:]
     private var powerGeneration = 0
     private var powerMAC: String?
+    private var forceScreenOn = false
 
     func connect(device: TVDevice, secrets: SecretProviding) {
         host = device.host
@@ -99,8 +100,9 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         teardownSocket()
     }
 
-    func togglePower(mac: String?) {
+    func togglePower(mac: String?, forceOn: Bool) {
         powerMAC = mac
+        forceScreenOn = forceOn
         powerGeneration += 1
         let generation = powerGeneration
         Task { [weak self] in
@@ -365,54 +367,61 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
     }
 
     private func runPowerToggle(_ generation: Int) async {
-        guard generation == powerGeneration, registered else { return }
-        emit(.diagnostic("LG power: reading getPowerState"))
+        guard generation == powerGeneration, registered else {
+            emit(.diagnostic("LG power: socket is not registered, so the screen command was not sent"))
+            return
+        }
+        emit(.diagnostic("LG power: reading getPowerState. mac=\(powerMAC ?? "none") ip=\(host)"))
         let stateResponse = await request(id: "lg-power-state", uri: LGSSAP.powerStateURI)
         guard generation == powerGeneration else { return }
         let payload = (stateResponse?["payload"] as? [String: Any]) ?? [:]
-        let state = LGSSAP.powerLabel(payload)
+        let reading = LGPowerReading.parse(payload: payload)
         let readable = stateResponse != nil && !LGSSAP.requestFailed(stateResponse)
-        emit(.diagnostic("LG power state: \(readable ? state : "no answer")"))
-        if readable, LGSSAP.isActivePower(state) {
+        let summary = readable ? reading.summary : "no answer"
+        emit(.diagnostic("LG power state: \(summary)"))
+        if readable, reading.screenIsOn {
+            if forceScreenOn {
+                emit(.diagnostic("LG power: screen is already on"))
+                emit(.lgPower(.confirmed(reading.summary)))
+                return
+            }
             emit(.lgPower(.turningOff))
             sendRequest(uri: LGSSAP.turnOffURI, payload: LGPayload())
             return
         }
-        let seen = readable ? state : "unknown"
-        emit(.lgPower(.turningOn(seen)))
-        await wakeAndTurnScreenOn(generation, from: seen)
+        emit(.lgPower(.turningOn(summary)))
+        await wakeAndTurnScreenOn(generation, from: summary)
     }
 
     private func wakeAndTurnScreenOn(_ generation: Int, from state: String) async {
+        async let networkWake = WakeLink.deliver(mac: powerMAC, host: host)
         if let mac = powerMAC, !mac.isEmpty {
             let delivery = WakeSender.send(mac: mac, host: host)
-            emit(.diagnostic("LG wake unicast \(delivery.unicastSent), broadcast \(delivery.broadcastSent) of \(delivery.broadcastAttempts)"))
-            if delivery.broadcastBlocked {
-                emit(.diagnostic("LG wake broadcast was blocked. This build has no multicast entitlement, so the packet went to the TV's last address."))
-            }
+            emit(.lgPower(.wake(delivery.line)))
         } else {
-            emit(.diagnostic("LG wake skipped: no MAC saved yet"))
+            emit(.lgPower(.wake("no MAC saved; screen-on commands only")))
         }
         guard generation == powerGeneration else { return }
-        let turnedOn = await request(id: "lg-power-on", uri: LGSSAP.turnOnScreenURI)
+        sendRequest(uri: LGSSAP.turnOnScreenURI, payload: LGPayload())
+        sendRequest(uri: LGSSAP.systemTurnOnURI, payload: LGPayload())
+        sendRequest(uri: LGSSAP.launchURI, payload: LGSSAP.launchPayload(appID: LGSSAP.homeAppID))
+        sendPointer("POWER")
+        emit(.diagnostic("LG sent turnOnScreen, system/turnOn, home launch, and POWER from \(state)"))
+        let network = await networkWake
         guard generation == powerGeneration else { return }
-        if LGSSAP.requestFailed(turnedOn) {
-            emit(.diagnostic("LG turnOnScreen failed. Sending POWER on the button socket."))
-            sendPointer("POWER")
-        } else {
-            emit(.diagnostic("LG turnOnScreen accepted from \(state)."))
-        }
+        emit(.lgPower(.wake(network)))
         var latest = state
-        for attempt in 1...4 {
+        for attempt in 1...6 {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard generation == powerGeneration, registered else { return }
             let poll = await request(id: "lg-power-state-\(attempt)", uri: LGSSAP.powerStateURI)
             guard generation == powerGeneration else { return }
             let payload = (poll?["payload"] as? [String: Any]) ?? [:]
-            latest = LGSSAP.powerLabel(payload)
-            emit(.diagnostic("LG power state after wake \(attempt): \(poll == nil ? "no answer" : latest)"))
-            if poll != nil, LGSSAP.isActivePower(latest) {
-                emit(.lgPower(.confirmed(latest)))
+            let reading = LGPowerReading.parse(payload: payload)
+            latest = poll == nil ? "no answer" : reading.summary
+            emit(.diagnostic("LG power state after wake \(attempt): \(latest)"))
+            if poll != nil, !LGSSAP.requestFailed(poll), reading.screenIsOn {
+                emit(.lgPower(.confirmed(reading.summary)))
                 return
             }
         }
@@ -594,6 +603,10 @@ final class LGController: NSObject, TVControlling, URLSessionDelegate, URLSessio
         }
         if let mac = MACAddress.preferred(in: payload) {
             emit(.learnedMAC(mac))
+            emit(.diagnostic("LG network info MAC \(mac)"))
+        } else if payload["wifi"] != nil || payload["wired"] != nil {
+            let keys = payload.keys.sorted().joined(separator: ", ")
+            emit(.diagnostic("LG network info had no MAC. Keys: \(keys)"))
         }
         if let points = payload["launchPoints"] as? [[String: Any]] {
             let parsed: [InstalledApp] = points.compactMap { item in

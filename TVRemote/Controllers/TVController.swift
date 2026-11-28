@@ -12,6 +12,7 @@ enum LGPowerNotice: Equatable {
     case turningOn(String)
     case confirmed(String)
     case stillOff(String)
+    case wake(String)
 }
 
 enum ControllerEvent {
@@ -40,7 +41,7 @@ protocol TVControlling: AnyObject {
     func refreshInputs()
     func select(input: TVInput)
     func submitPairing(_ value: String)
-    func togglePower(mac: String?)
+    func togglePower(mac: String?, forceOn: Bool)
 }
 
 extension TVControlling {
@@ -48,7 +49,7 @@ extension TVControlling {
     func deleteBackward() {}
     func refreshInputs() {}
     func submitPairing(_ value: String) {}
-    func togglePower(mac: String?) {}
+    func togglePower(mac: String?, forceOn: Bool) {}
 }
 
 enum ControllerFactory {
