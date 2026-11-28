@@ -251,11 +251,35 @@ struct AdvancedSheet: View {
 struct DiagnosticsView: View {
     var session: RemoteSession
     @State private var copied = false
+    @State private var macDraft = ""
+    @State private var macMessage = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            Text(session.powerDiagnosticHeader)
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            HStack {
+                TextField("MAC AA:BB:CC:DD:EE:FF", text: $macDraft)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("Save") {
+                    macMessage = session.saveEnteredMAC(macDraft) ?? "Saved"
+                }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Color.remoteAccent)
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if !macMessage.isEmpty {
+                Text(macMessage)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
             if session.diagnosticLog.isEmpty {
-                Text("No probes yet. Scan for a TV or try connecting, then come back.")
+                Text("No probes yet. Press power or connect, then come back.")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
             } else {
@@ -269,9 +293,8 @@ struct DiagnosticsView: View {
             }
             Spacer(minLength: 0)
             Button(copied ? "Copied" : "Copy log") {
-                UIPasteboard.general.string = session.diagnosticText.isEmpty
-                    ? "No probes yet."
-                    : session.diagnosticText
+                let body = session.diagnosticText.isEmpty ? "No probes yet." : session.diagnosticText
+                UIPasteboard.general.string = "\(session.powerDiagnosticHeader)\n\n\(body)"
                 copied = true
             }
             .buttonStyle(RemoteFillStyle(tint: .remoteAccent))
@@ -281,5 +304,10 @@ struct DiagnosticsView: View {
         .background(Color.remoteBackground)
         .navigationTitle("Connection log")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if macDraft.isEmpty {
+                macDraft = session.activeDevice?.macAddress ?? ""
+            }
+        }
     }
 }

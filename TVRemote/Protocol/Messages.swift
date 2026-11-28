@@ -197,6 +197,36 @@ struct LGPayload: Equatable {
     }
 }
 
+struct LGPowerReading: Equatable {
+    var state: String
+    var processing: String
+    var reason: String
+
+    var summary: String {
+        var parts = [state.isEmpty ? "unknown" : state]
+        if !processing.isEmpty { parts.append("processing \(processing)") }
+        if !reason.isEmpty { parts.append("reason \(reason)") }
+        return parts.joined(separator: ", ")
+    }
+
+    /// `Active` with a screen-off reason is still off. Quick Start reports
+    /// Active Standby, Screen Off, or Suspend while the socket stays up.
+    var screenIsOn: Bool {
+        guard LGSSAP.isActivePower(state) else { return false }
+        let extra = "\(processing) \(reason)".lowercased()
+        let asleep = ["screen off", "standby", "suspend", "power off", "screen saver"]
+        return !asleep.contains { extra.contains($0) }
+    }
+
+    static func parse(payload: [String: Any]) -> LGPowerReading {
+        func text(_ key: String) -> String {
+            (payload[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        let state = text("state").isEmpty ? text("powerState") : text("state")
+        return LGPowerReading(state: state, processing: text("processing"), reason: text("reason"))
+    }
+}
+
 enum LGCommand: Equatable {
     case pointer(String)
     case request(uri: String, payload: LGPayload)
@@ -376,10 +406,11 @@ enum LGSSAP {
     }
 
     static func powerLabel(_ payload: [String: Any]) -> String {
-        if let state = payload["state"] as? String, !state.isEmpty { return state }
-        if let state = payload["powerState"] as? String, !state.isEmpty { return state }
-        return "unknown"
+        LGPowerReading.parse(payload: payload).summary
     }
+
+    static let systemTurnOnURI = "ssap://system/turnOn"
+    static let homeAppID = "com.webos.app.home"
 
     static func requestFailed(_ object: [String: Any]?) -> Bool {
         guard let object else { return true }

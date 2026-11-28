@@ -72,7 +72,17 @@ struct WakeDelivery: Equatable {
     var unicastSent = 0
     var broadcastSent = 0
     var broadcastAttempts = 0
+    var broadcastError: String?
+    var unicastError: String?
     var broadcastBlocked: Bool { broadcastAttempts > 0 && broadcastSent == 0 }
+
+    var line: String {
+        var parts = ["bsd unicast \(unicastSent), broadcast \(broadcastSent)/\(broadcastAttempts)"]
+        if let broadcastError { parts.append("broadcast error \(broadcastError)") }
+        if let unicastError { parts.append("unicast error \(unicastError)") }
+        if broadcastBlocked { parts.append("broadcast blocked") }
+        return parts.joined(separator: "; ")
+    }
 }
 
 enum WakeSender {
@@ -92,12 +102,18 @@ enum WakeSender {
         for _ in 0..<bursts {
             for address in targets {
                 for port in WakeOnLAN.ports {
-                    let sent = blast(packet, address: address, port: port, fd: fd)
+                    let error = blast(packet, address: address, port: port, fd: fd)
                     if WakeOnLAN.isBroadcast(address) {
                         delivery.broadcastAttempts += 1
-                        if sent { delivery.broadcastSent += 1 }
-                    } else if sent {
+                        if error == nil {
+                            delivery.broadcastSent += 1
+                        } else if delivery.broadcastError == nil {
+                            delivery.broadcastError = error
+                        }
+                    } else if error == nil {
                         delivery.unicastSent += 1
+                    } else if delivery.unicastError == nil {
+                        delivery.unicastError = error
                     }
                 }
             }
@@ -105,7 +121,8 @@ enum WakeSender {
         return delivery
     }
 
-    private static func blast(_ packet: Data, address: String, port: UInt16, fd: Int32) -> Bool {
+    /// nil means the kernel accepted the datagram.
+    private static func blast(_ packet: Data, address: String, port: UInt16, fd: Int32) -> String? {
         var dest = sockaddr_in()
         dest.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         dest.sin_family = sa_family_t(AF_INET)
@@ -119,7 +136,84 @@ enum WakeSender {
                 }
             }
         }
-        return result == packet.count
+        guard result == packet.count else {
+            let code = errno
+            return "\(address):\(port) errno \(code) \(String(cString: strerror(code)))"
+        }
+        return nil
+    }
+}
+
+/// Same magic packet through Network.framework, so a blocked broadcast shows up as an error instead of a silent drop.
+enum WakeLink {
+    static func deliver(mac: String?, host: String?) async -> String {
+        guard let mac, !mac.isEmpty, let packet = WakeOnLAN.packet(mac: mac) else {
+            return "NW wake skipped: no MAC"
+        }
+        let targets = WakeOnLAN.targets(host: host, localAddress: LocalIPv4.address())
+        var lines: [String] = []
+        await withTaskGroup(of: String.self) { group in
+            for address in targets {
+                for port in WakeOnLAN.ports {
+                    group.addTask {
+                        await send(packet, address: address, port: port)
+                    }
+                }
+            }
+            for await line in group {
+                lines.append(line)
+            }
+        }
+        return lines.sorted().joined(separator: "; ")
+    }
+
+    private static func send(_ packet: Data, address: String, port: UInt16) async -> String {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            return "NW \(address):\(port) bad port"
+        }
+        let connection = NWConnection(host: NWEndpoint.Host(address), port: nwPort, using: .udp)
+        return await withCheckedContinuation { continuation in
+            let once = OnceResume(continuation)
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    sendBurst(packet, over: connection, address: address, port: port, once: once)
+                case .failed(let error):
+                    connection.cancel()
+                    once.resume("NW \(address):\(port) failed \(error.localizedDescription)")
+                default:
+                    break
+                }
+            }
+            connection.start(queue: .global(qos: .utility))
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.2) {
+                connection.cancel()
+                once.resume("NW \(address):\(port) timed out")
+            }
+        }
+    }
+
+    private static func sendBurst(
+        _ packet: Data,
+        over connection: NWConnection,
+        address: String,
+        port: UInt16,
+        once: OnceResume<String>,
+        remaining: Int = 3
+    ) {
+        connection.send(content: packet, completion: .contentProcessed { error in
+            if let error {
+                connection.cancel()
+                once.resume("NW \(address):\(port) send \(error.localizedDescription)")
+                return
+            }
+            if remaining <= 1 {
+                connection.cancel()
+                once.resume("NW \(address):\(port) sent 3")
+            } else {
+                sendBurst(packet, over: connection, address: address, port: port, once: once, remaining: remaining - 1)
+            }
+        })
     }
 }
 
